@@ -1,5 +1,13 @@
 {
+  "scripts": {
+    "start:mobile": "cd apps/mobile && npx expo start"
+  },
   "dependencies": {
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "expo": "^54.0.33"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
   }
 }
