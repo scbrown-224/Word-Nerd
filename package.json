@@ -1,10 +1,10 @@
 {
+  "scripts": {
+    "start:mobile": "cd apps/mobile && npx expo start"
+  },
   "dependencies": {
     "dotenv": "^17.2.3",
-    "expo": "^54.0.33",
-    "native": "^0.3.3",
-    "node.js": "^0.0.1-security",
-    "react": "^19.2.4"
+    "expo": "^54.0.33"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
