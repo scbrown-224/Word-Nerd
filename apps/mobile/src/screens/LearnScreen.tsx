@@ -2,6 +2,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 import { collection, getDocs, limit, query } from "firebase/firestore";
 import { db } from "../firebase/firebase";
+import { auth } from "../firebase/firebase";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  increment,
+} from "firebase/firestore";
+
 
 type WordCard = {
   id: string; // Firestore doc id
@@ -75,14 +85,58 @@ export default function LearnScreen() {
     setIndex((prev) => (prev + 1) % words.length);
   };
 
-  const handleKnow = () => {
+  // helper function to track words
+  const trackUserWord = async (wordId: string, action: "know" | "dontKnow") => {
+    const u = auth.currentUser;
+    if (!u) return;
+  
+    const userWordRef = doc(db, "users", u.uid, "userWords", wordId);
+    const snap = await getDoc(userWordRef);
+  
+    // Create if missing
+    if (!snap.exists()) {
+      await setDoc(userWordRef, {
+        wordRef: doc(db, "words", wordId),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        seenCount: 0,
+        correctCount: 0,
+        incorrectCount: 0,
+        status: "learning",
+        isFavorite: false,
+        isBookmarked: false,
+      });
+    }
+  
+    // Update counts based on action
+    if (action === "know") {
+      await updateDoc(userWordRef, {
+        seenCount: increment(1),
+        correctCount: increment(1),
+        updatedAt: serverTimestamp(),
+        // optional: mark learned if you want later
+      });
+    } else {
+      await updateDoc(userWordRef, {
+        seenCount: increment(1),
+        incorrectCount: increment(1),
+        updatedAt: serverTimestamp(),
+        status: "learning",
+      });
+    }
+  };
+  
+
+  const handleKnow = async () => {
+    await trackUserWord(current.id, "know");
+  
     setProgress((prev) => {
       const currentCorrect = prev[current.id]?.correct ?? 0;
       const nextCorrect = currentCorrect + 1;
       const status = nextCorrect >= 3 ? "learned" : "learning";
       return { ...prev, [current.id]: { correct: nextCorrect, status } };
     });
-
+  
     if (correctCount + 1 >= 3) {
       setShowSuccess(true);
       setTimeout(() => {
@@ -92,11 +146,12 @@ export default function LearnScreen() {
     } else {
       next();
     }
-  };
+  };  
 
-  const handleDontKnow = () => {
+  const handleDontKnow = async () => {
+    await trackUserWord(current.id, "dontKnow");
     setShowDefinition(true);
-  };
+  };  
 
   const handleContinue = () => {
     setShowDefinition(false);
