@@ -8,21 +8,39 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const trimmedEmail = email.trim();
+
   const onSignUp = async () => {
     setError(null);
+    if (!trimmedEmail) {
+      setError("Please enter your email.");
+      return;
+    }
+    if (!password) {
+      setError("Please enter a password.");
+      return;
+    }
     try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      await createUserWithEmailAndPassword(auth, trimmedEmail, password);
     } catch (e: any) {
-      setError(e.message);
+      setError(e.message ?? "Something went wrong.");
     }
   };
 
   const onSignIn = async () => {
     setError(null);
+    if (!trimmedEmail) {
+      setError("Please enter your email.");
+      return;
+    }
+    if (!password) {
+      setError("Please enter a password.");
+      return;
+    }
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await signInWithEmailAndPassword(auth, trimmedEmail, password);
     } catch (e: any) {
-      setError(e.message);
+      setError(e.message ?? "Something went wrong.");
     }
   };
 
