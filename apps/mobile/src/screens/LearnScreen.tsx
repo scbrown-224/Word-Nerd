@@ -1,73 +1,78 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import { collection, getDocs, limit, query } from "firebase/firestore";
+import { db } from "../firebase/firebase";
 
 type WordCard = {
-  id: string;
+  id: string; // Firestore doc id
   word: string;
   definition: string;
   example: string;
-  category: string;
-  difficulty: "beginner" | "intermediate" | "advanced";
 };
-
-const WORDS: WordCard[] = [
-  {
-    id: "catalyst",
-    word: "Catalyst",
-    definition: "Something that speeds up a process or causes change without being used up.",
-    example: "The new coach served as a catalyst for the team’s turnaround.",
-    category: "Science",
-    difficulty: "intermediate",
-  },
-  {
-    id: "resilient",
-    word: "Resilient",
-    definition: "Able to recover quickly after something difficult happens.",
-    example: "Children are remarkably resilient after routine setbacks.",
-    category: "Mindset",
-    difficulty: "beginner",
-  },
-  {
-    id: "feedback",
-    word: "Feedback",
-    definition: "When an outcome affects the process that caused it (can increase or decrease the change).",
-    example: "Positive feedback between ice melt and warming accelerates climate change.",
-    category: "Systems",
-    difficulty: "intermediate",
-  },
-  {
-    id: "sequester",
-    word: "Sequester",
-    definition: "To capture and store something, especially carbon, for a long time.",
-    example: "Healthy forests sequester large amounts of carbon each year.",
-    category: "Environment",
-    difficulty: "advanced",
-  },
-  {
-    id: "symbiosis",
-    word: "Symbiosis",
-    definition: "A close relationship between two different organisms where at least one benefits.",
-    example: "Bees and flowering plants share a classic symbiosis.",
-    category: "Biology",
-    difficulty: "beginner",
-  },
-];
 
 type ProgressMap = Record<string, { correct: number; status: "learning" | "learned" }>;
 
 export default function LearnScreen() {
+  const [words, setWords] = useState<WordCard[]>([]);
+  const [loadingWords, setLoadingWords] = useState(true);
+
   const [index, setIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>({});
 
-  const current = useMemo(() => WORDS[index], [index]);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const q = query(collection(db, "words"), limit(50));
+        const snap = await getDocs(q);
+
+        const loaded: WordCard[] = snap.docs.map((d) => {
+          const data = d.data() as any;
+          return {
+            id: d.id,
+            word: data.word,
+            definition: data.definition,
+            example: data.example,
+          };
+        });
+
+        setWords(loaded);
+      } finally {
+        setLoadingWords(false);
+      }
+    };
+
+    load();
+  }, []);
+
+  const current = useMemo(() => words[index], [words, index]);
+
+  // Loading / empty guards (prevents crashes)
+  if (loadingWords) {
+    return (
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <Text style={styles.header}>Learn</Text>
+        <Text style={styles.skipText}>Loading words…</Text>
+      </ScrollView>
+    );
+  }
+
+  if (words.length === 0) {
+    return (
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <Text style={styles.header}>Learn</Text>
+        <Text style={styles.skipText}>No words found in Firestore.</Text>
+      </ScrollView>
+    );
+  }
+
   const correctCount = progress[current.id]?.correct ?? 0;
   const progressPct = Math.min((correctCount / 3) * 100, 100);
 
   const next = () => {
     setShowDefinition(false);
-    setIndex((prev) => (prev + 1) % WORDS.length);
+    setIndex((prev) => (prev + 1) % words.length);
   };
 
   const handleKnow = () => {
@@ -108,10 +113,10 @@ export default function LearnScreen() {
       <View style={styles.progressHeader}>
         <Text style={styles.header}>Learn</Text>
         <Text style={styles.subtitle}>
-          {index + 1}/{WORDS.length}
+          {index + 1}/{words.length}
         </Text>
         <View style={styles.topProgress}>
-          <View style={[styles.topProgressFill, { width: `${((index + 1) / WORDS.length) * 100}%` }]} />
+          <View style={[styles.topProgressFill, { width: `${((index + 1) / words.length) * 100}%` }]} />
         </View>
       </View>
 
@@ -124,10 +129,8 @@ export default function LearnScreen() {
           </View>
         ) : (
           <View style={styles.card}>
-            <View style={styles.cardBadges}>
-              <Text style={[styles.badge, difficultyBadge[current.difficulty]]}>{current.difficulty}</Text>
-              <Text style={[styles.badge, styles.categoryBadge]}>{current.category}</Text>
-            </View>
+            {/* Badges removed for now since Firestore words currently only have word/definition/example.
+                (Styling unchanged—this section is just not rendered.) */}
 
             <View style={styles.wordBlock}>
               <Text style={styles.word}>{current.word}</Text>
@@ -136,9 +139,7 @@ export default function LearnScreen() {
                   <View style={[styles.wordProgressFill, { width: `${progressPct}%` }]} />
                 </View>
               )}
-              {correctCount > 0 && (
-                <Text style={styles.wordProgressLabel}>{correctCount} / 3 correct</Text>
-              )}
+              {correctCount > 0 && <Text style={styles.wordProgressLabel}>{correctCount} / 3 correct</Text>}
             </View>
 
             {showDefinition && (
