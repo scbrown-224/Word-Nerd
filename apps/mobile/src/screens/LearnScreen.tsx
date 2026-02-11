@@ -1,73 +1,47 @@
 import React, { useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 
-type WordCard = {
-  id: string;
-  word: string;
-  definition: string;
-  example: string;
-  category: string;
-  difficulty: "beginner" | "intermediate" | "advanced";
-};
+import { words as WORDS, topics as TOPICS, Word } from "../data/mockWords";
 
-const WORDS: WordCard[] = [
-  {
-    id: "catalyst",
-    word: "Catalyst",
-    definition: "Something that speeds up a process or causes change without being used up.",
-    example: "The new coach served as a catalyst for the team’s turnaround.",
-    category: "Science",
-    difficulty: "intermediate",
-  },
-  {
-    id: "resilient",
-    word: "Resilient",
-    definition: "Able to recover quickly after something difficult happens.",
-    example: "Children are remarkably resilient after routine setbacks.",
-    category: "Mindset",
-    difficulty: "beginner",
-  },
-  {
-    id: "feedback",
-    word: "Feedback",
-    definition: "When an outcome affects the process that caused it (can increase or decrease the change).",
-    example: "Positive feedback between ice melt and warming accelerates climate change.",
-    category: "Systems",
-    difficulty: "intermediate",
-  },
-  {
-    id: "sequester",
-    word: "Sequester",
-    definition: "To capture and store something, especially carbon, for a long time.",
-    example: "Healthy forests sequester large amounts of carbon each year.",
-    category: "Environment",
-    difficulty: "advanced",
-  },
-  {
-    id: "symbiosis",
-    word: "Symbiosis",
-    definition: "A close relationship between two different organisms where at least one benefits.",
-    example: "Bees and flowering plants share a classic symbiosis.",
-    category: "Biology",
-    difficulty: "beginner",
-  },
-];
+const FALLBACK_WORD: Word = {
+  id: "placeholder",
+  word: "Placeholder",
+  definition: "Add words to src/data/mockWords.ts to start practicing.",
+  example: "This is where your sample sentences will show up.",
+  topics: ["general"],
+  difficulty: "beginner",
+};
 
 type ProgressMap = Record<string, { correct: number; status: "learning" | "learned" }>;
 
 export default function LearnScreen() {
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [index, setIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>({});
 
-  const current = useMemo(() => WORDS[index], [index]);
+  const filteredWords = useMemo(
+    () =>
+      selectedTopics.size === 0
+        ? WORDS
+        : WORDS.filter((w) => w.topics.some((t) => selectedTopics.has(t))),
+    [selectedTopics]
+  );
+
+  const totalWords = filteredWords.length || 1;
+  const current = useMemo<Word>(
+    () => (filteredWords.length ? filteredWords[index % totalWords] : FALLBACK_WORD),
+    [filteredWords, index, totalWords]
+  );
   const correctCount = progress[current.id]?.correct ?? 0;
   const progressPct = Math.min((correctCount / 3) * 100, 100);
+  const primaryTopic = current.topics?.[0] ?? "general";
+  const categoryLabel = primaryTopic.charAt(0).toUpperCase() + primaryTopic.slice(1);
 
   const next = () => {
     setShowDefinition(false);
-    setIndex((prev) => (prev + 1) % WORDS.length);
+    setIndex((prev) => (prev + 1) % totalWords);
   };
 
   const handleKnow = () => {
@@ -103,15 +77,66 @@ export default function LearnScreen() {
     next();
   };
 
+  const toggleTopic = (id: string) => {
+    setIndex(0);
+    setProgress({});
+    setShowDefinition(false);
+    setShowSuccess(false);
+    setSelectedTopics((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const hasSelection = selectedTopics.size > 0;
+
+  if (!hasSelection) {
+    return (
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.progressHeader}>
+          <Text style={styles.header}>Pick a topic</Text>
+          <Text style={styles.subtitle}>Choose one or more to start learning</Text>
+        </View>
+
+        <View style={styles.topicGrid}>
+          {TOPICS.map((topic) => {
+            const active = selectedTopics.has(topic.id);
+            return (
+              <Pressable
+                key={topic.id}
+                style={[styles.topicCard, active && styles.topicCardActive]}
+                onPress={() => toggleTopic(topic.id)}
+              >
+                <Text style={[styles.topicName, active && styles.topicNameActive]}>{topic.name}</Text>
+                <Text style={styles.topicSeeds}>{topic.seeds.slice(0, 3).join(", ")}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Pressable
+          style={[styles.button, hasSelection ? styles.continueButton : styles.disabledButton]}
+          onPress={() => setSelectedTopics(new Set(selectedTopics))}
+          disabled={!hasSelection}
+        >
+          <Text style={styles.buttonText}>Start learning</Text>
+          <Text style={styles.buttonIcon}>›</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.progressHeader}>
         <Text style={styles.header}>Learn</Text>
         <Text style={styles.subtitle}>
-          {index + 1}/{WORDS.length}
+          {index + 1}/{totalWords}
         </Text>
         <View style={styles.topProgress}>
-          <View style={[styles.topProgressFill, { width: `${((index + 1) / WORDS.length) * 100}%` }]} />
+          <View style={[styles.topProgressFill, { width: `${((index + 1) / totalWords) * 100}%` }]} />
         </View>
       </View>
 
@@ -126,7 +151,7 @@ export default function LearnScreen() {
           <View style={styles.card}>
             <View style={styles.cardBadges}>
               <Text style={[styles.badge, difficultyBadge[current.difficulty]]}>{current.difficulty}</Text>
-              <Text style={[styles.badge, styles.categoryBadge]}>{current.category}</Text>
+              <Text style={[styles.badge, styles.categoryBadge]}>{categoryLabel}</Text>
             </View>
 
             <View style={styles.wordBlock}>
@@ -275,4 +300,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   skipText: { color: "#475569", fontWeight: "700" },
+  topicGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  topicCard: {
+    flexBasis: "48%",
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+  },
+  topicCardActive: {
+    borderColor: "#f97316",
+    backgroundColor: "#fff7ed",
+  },
+  topicName: { fontWeight: "800", color: "#0f172a", fontSize: 14 },
+  topicNameActive: { color: "#c2410c" },
+  topicSeeds: { color: "#475569", fontSize: 12 },
+  disabledButton: { backgroundColor: "#cbd5e1" },
 });
