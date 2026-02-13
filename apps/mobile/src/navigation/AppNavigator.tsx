@@ -14,6 +14,10 @@ import LearnedScreen from "../screens/LearnedScreen";
 
 import { View, Pressable, Text, StyleSheet } from "react-native";
 
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../firebase/firebase";
+
+
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
@@ -72,12 +76,26 @@ export default function AppNavigator() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
+  
+      if (u) {
+        const userRef = doc(db, "users", u.uid);
+        const snap = await getDoc(userRef);
+  
+        if (!snap.exists()) {
+          await setDoc(userRef, {
+            email: u.email,
+            createdAt: serverTimestamp(),
+          });
+        }
+      }
     });
+  
     return unsub;
   }, []);
+  
 
   if (loading) return null;
 
