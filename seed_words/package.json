@@ -1,0 +1,17 @@
+{
+  "name": "word-nerd-seeder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "seed.js",
+  "scripts": {
+    "seed:biology": "node seed.js biology",
+    "seed:climate": "node seed.js climate",
+    "seed:mindset": "node seed.js mindset"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "node-fetch": "^2.6.9",
+    "p-limit": "^3.1.0"
+  }
+}
