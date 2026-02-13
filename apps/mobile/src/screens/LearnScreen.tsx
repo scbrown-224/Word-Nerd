@@ -3,6 +3,9 @@ import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 
 import { words as WORDS, topics as TOPICS, Word } from "../data/mockWords";
 
+import { doc, updateDoc, arrayUnion, arrayRemove, serverTimestamp, setDoc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase/firebase";
+
 const FALLBACK_WORD: Word = {
   id: "placeholder",
   word: "Placeholder",
@@ -77,18 +80,58 @@ export default function LearnScreen() {
     next();
   };
 
-  const toggleTopic = (id: string) => {
+  const ensureUserDoc = async (uid: string, email?: string | null) => {
+    const userRef = doc(db, "users", uid);
+    const snap = await getDoc(userRef);
+  
+    if (!snap.exists()) {
+      await setDoc(userRef, {
+        email: email ?? null,
+        createdAt: serverTimestamp(),
+        selectedTopics: [],
+        wordsPerDay: 10, // pick your default
+      });
+    }
+  
+    return userRef;
+  };
+  
+
+  const toggleTopic = async (id: string) => {
+    // reset local learn state like you already do
     setIndex(0);
     setProgress({});
     setShowDefinition(false);
     setShowSuccess(false);
-    setSelectedTopics((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  
+    const user = auth.currentUser;
+    if (!user) return; // or route to login
+  
+    // figure out whether we're selecting or unselecting based on current local state
+    const isCurrentlySelected = selectedTopics.has(id);
+    const willSelect = !isCurrentlySelected;
+  
+    try {
+      const userRef = await ensureUserDoc(user.uid, user.email);
+  
+      await updateDoc(userRef, {
+        selectedTopics: willSelect ? arrayUnion(id) : arrayRemove(id),
+        updatedAt: serverTimestamp(),
+      });
+  
+      // now update local state so UI matches DB
+      setSelectedTopics((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } catch (e) {
+      console.log("Failed to update selectedTopics:", e);
+      // optional: show a toast/snackbar here
+    }
   };
+  
 
   const hasSelection = selectedTopics.size > 0;
 
