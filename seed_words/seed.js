@@ -45,6 +45,8 @@ async function main() {
   const db = admin.firestore();
   const FieldValue = admin.firestore.FieldValue;
 
+  
+
   console.log(`→ Seeding topic: ${topic}`);
 
   const candidates = await fetchCandidates(topic);
@@ -80,9 +82,11 @@ async function main() {
 
       const wordData = {
         ...enrichedWord,
+        topics: FieldValue.arrayUnion(topic), // ✅ add topic membership on global word
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       };
+      
 
       const topicData = {
         name: topic,
