@@ -1,13 +1,26 @@
 import React from "react";
 import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 
 export default function GamesScreen() {
-  // TODO: hook into learned/learning words for game pools
+  const navigation = useNavigation<any>();
+
   const games = [
-    { title: "Match", desc: "Match words to definitions (placeholder)" },
+    { title: "Match", desc: "Drag words onto the correct definition." },
     { title: "Speed Round", desc: "Quick multiple choice (placeholder)" },
     { title: "Spelling", desc: "Type the word you hear/see (placeholder)" },
   ];
+
+  const onPlay = (title: string) => {
+    if (title === "Match") {
+      navigation.navigate("MatchGame", {
+        poolType: "topic",
+        topic: "biology",
+        numPairs: 6,
+        timeLimitSec: 60,
+      });
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -18,7 +31,7 @@ export default function GamesScreen() {
         <View key={g.title} style={styles.card}>
           <Text style={styles.cardTitle}>{g.title}</Text>
           <Text style={styles.bodyText}>{g.desc}</Text>
-          <Pressable style={styles.primary} onPress={() => {}}>
+          <Pressable style={styles.primary} onPress={() => onPlay(g.title)}>
             <Text style={styles.primaryText}>Play</Text>
           </Pressable>
         </View>

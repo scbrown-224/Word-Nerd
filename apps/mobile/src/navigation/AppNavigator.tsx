@@ -11,13 +11,24 @@ import LearnScreen from "../screens/LearnScreen";
 import ReviewScreen from "../screens/ReviewScreen";
 import GamesScreen from "../screens/GamesScreen";
 import LearnedScreen from "../screens/LearnedScreen";
+import MatchGameScreen from "../screens/MatchGameScreen";
+
 
 import { View, Pressable, Text, StyleSheet } from "react-native";
+
+type MatchSettings = {
+  poolType: "topic";
+  topic: "biology" | "climate" | "mindset";
+  numPairs: number;
+  timeLimitSec: number;
+};
 
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
+  MatchGame: MatchSettings;
 };
+
 
 type TabKey = "home" | "learn" | "review" | "games" | "learned";
 
@@ -85,7 +96,10 @@ export default function AppNavigator() {
     <NavigationContainer>
       <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
         {user ? (
-          <Stack.Screen name="Main" component={MainTabs} />
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+            <Stack.Screen name="MatchGame" component={MatchGameScreen} />
+          </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />
         )}
