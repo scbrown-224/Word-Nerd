@@ -1,19 +1,53 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 
-import { words as WORDS, topics as TOPICS, Word } from "../data/mockWords";
+import { topics as TOPICS } from "../data/mockWords";
 
-import { doc, updateDoc, arrayUnion, arrayRemove, serverTimestamp, setDoc, getDoc } from "firebase/firestore";
+// import { collection, doc, getDoc, getDocs, query, where, documentId } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  documentId,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  arrayUnion,
+  arrayRemove,
+} from "firebase/firestore";
+
 import { auth, db } from "../firebase/firebase";
 
+
+import { enrollTopicForUser } from "../services/enrollmentService";
+
+
+type Word = {
+  wordId: string;
+  word: string;
+  definition: string;
+  example: string;
+  meanings?: any[];
+  audioUrl?: string | null;
+  topics?: string[]; // ✅ add this
+  difficulty?: "beginner" | "intermediate" | "advanced";
+};
+
 const FALLBACK_WORD: Word = {
-  id: "placeholder",
-  word: "Placeholder",
-  definition: "Add words to src/data/mockWords.ts to start practicing.",
-  example: "This is where your sample sentences will show up.",
-  topics: ["general"],
+  wordId: "placeholder",
+  word: "Pick a topic to begin",
+  definition: "Once you enroll, words will load from Firestore.",
+  example: "Try selecting Biology, then press Start learning.",
+  audioUrl: null,
+  meanings: [],
+  topics: ["general"], // optional
   difficulty: "beginner",
 };
+
+
 
 type ProgressMap = Record<string, { correct: number; status: "learning" | "learned" }>;
 
@@ -23,21 +57,94 @@ export default function LearnScreen() {
   const [showDefinition, setShowDefinition] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>({});
+  const [hasStarted, setHasStarted] = useState(false);
+  const [fsWords, setFsWords] = useState<Word[]>([]);
+  const [loadingWords, setLoadingWords] = useState(false);
 
-  const filteredWords = useMemo(
-    () =>
-      selectedTopics.size === 0
-        ? WORDS
-        : WORDS.filter((w) => w.topics.some((t) => selectedTopics.has(t))),
-    [selectedTopics]
-  );
+
+  useEffect(() => {
+    const fetchWords = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+  
+      // if no topics selected yet, show nothing (or show a prompt)
+      if (selectedTopics.size === 0) {
+        setFsWords([]);
+        return;
+      }
+  
+      setLoadingWords(true);
+  
+      try {
+        const topicsArray = Array.from(selectedTopics);
+  
+        // 1) query userWords that match selected topics
+        // This requires that userWords docs have `topics: [topicId]` (you added this ✅)
+        const userWordsCol = collection(db, "users", user.uid, "userWords");
+  
+        // Firestore allows array-contains-any up to 10 values
+        const qUserWords = query(userWordsCol, where("topics", "array-contains-any", topicsArray.slice(0, 10)));
+        const userWordsSnap = await getDocs(qUserWords);
+  
+        const wordIds = userWordsSnap.docs.map((d) => d.id);
+        if (wordIds.length === 0) {
+          setFsWords([]);
+          setLoadingWords(false);
+          return;
+        }
+  
+        // 2) fetch global word docs in chunks (documentId() "in" limit is 10)
+        const chunks: string[][] = [];
+        for (let i = 0; i < wordIds.length; i += 10) chunks.push(wordIds.slice(i, i + 10));
+  
+        const fetched: Word[] = [];
+        for (const ids of chunks) {
+          const wordsCol = collection(db, "words");
+          const qWords = query(wordsCol, where(documentId(), "in", ids));
+          const wordsSnap = await getDocs(qWords);
+  
+          wordsSnap.forEach((w) => {
+            const data = w.data() as any;
+            fetched.push({
+              wordId: data.wordId ?? w.id,
+              word: data.word ?? w.id,
+              definition: data.definition ?? "",
+              example: data.example ?? "",
+              meanings: data.meanings ?? [],
+              audioUrl: data.audioUrl ?? null,
+              topics: data.topics ?? [],
+              difficulty: "beginner", // default until you add difficulty to global docs
+            });
+          });
+        }
+  
+        // Optional: stable ordering
+        fetched.sort((a, b) => a.word.localeCompare(b.word));
+  
+        setFsWords(fetched);
+      } catch (e) {
+        console.log("Failed to fetch Firestore words:", e);
+        setFsWords([]);
+      } finally {
+        setLoadingWords(false);
+      }
+    };
+  
+    fetchWords();
+  }, [selectedTopics]);
+  
+  
+  const filteredWords = useMemo(() => {
+    return fsWords.length ? fsWords : [FALLBACK_WORD as any];
+  }, [fsWords]);
+  
 
   const totalWords = filteredWords.length || 1;
   const current = useMemo<Word>(
     () => (filteredWords.length ? filteredWords[index % totalWords] : FALLBACK_WORD),
     [filteredWords, index, totalWords]
   );
-  const correctCount = progress[current.id]?.correct ?? 0;
+  const correctCount = progress[current.wordId]?.correct ?? 0;
   const progressPct = Math.min((correctCount / 3) * 100, 100);
   const primaryTopic = current.topics?.[0] ?? "general";
   const categoryLabel = primaryTopic.charAt(0).toUpperCase() + primaryTopic.slice(1);
@@ -49,10 +156,10 @@ export default function LearnScreen() {
 
   const handleKnow = () => {
     setProgress((prev) => {
-      const currentCorrect = prev[current.id]?.correct ?? 0;
+      const currentCorrect = prev[current.wordId]?.correct ?? 0;
       const nextCorrect = currentCorrect + 1;
       const status = nextCorrect >= 3 ? "learned" : "learning";
-      return { ...prev, [current.id]: { correct: nextCorrect, status } };
+      return { ...prev, [current.wordId]: { correct: nextCorrect, status } };
     });
 
     if (correctCount + 1 >= 3) {
@@ -135,7 +242,7 @@ export default function LearnScreen() {
 
   const hasSelection = selectedTopics.size > 0;
 
-  if (!hasSelection) {
+  if (!hasStarted) {
     return (
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.progressHeader}>
@@ -160,13 +267,26 @@ export default function LearnScreen() {
         </View>
 
         <Pressable
-          style={[styles.button, hasSelection ? styles.continueButton : styles.disabledButton]}
-          onPress={() => setSelectedTopics(new Set(selectedTopics))}
-          disabled={!hasSelection}
-        >
-          <Text style={styles.buttonText}>Start learning</Text>
-          <Text style={styles.buttonIcon}>›</Text>
-        </Pressable>
+  style={[styles.button, hasSelection ? styles.continueButton : styles.disabledButton]}
+  onPress={async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      for (const topic of selectedTopics) {
+        await enrollTopicForUser(user.uid, topic);
+      }
+      setHasStarted(true); // ✅ NOW go to Learn view
+    } catch (e) {
+      console.log("Enrollment failed:", e);
+    }
+  }}
+  disabled={!hasSelection}
+>
+  <Text style={styles.buttonText}>Start learning</Text>
+  <Text style={styles.buttonIcon}>›</Text>
+</Pressable>
+
       </ScrollView>
     );
   }
