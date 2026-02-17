@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 
-import { topics as TOPICS } from "../data/mockWords";
-
 // import { collection, doc, getDoc, getDocs, query, where, documentId } from "firebase/firestore";
 import {
   collection,
@@ -25,6 +23,12 @@ import { auth, db } from "../firebase/firebase";
 import { enrollTopicForUser } from "../services/enrollmentService";
 
 
+type Topic = {
+  id: string;
+  name: string;
+  seeds?: string[];
+};
+
 type Word = {
   wordId: string;
   word: string;
@@ -43,7 +47,7 @@ const FALLBACK_WORD: Word = {
   example: "Try selecting Biology, then press Start learning.",
   audioUrl: null,
   meanings: [],
-  topics: ["general"], // optional
+  topics: [],
   difficulty: "beginner",
 };
 
@@ -53,6 +57,8 @@ type ProgressMap = Record<string, { correct: number; status: "learning" | "learn
 
 export default function LearnScreen() {
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [topicsLoading, setTopicsLoading] = useState(true);
   const [index, setIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -61,12 +67,61 @@ export default function LearnScreen() {
   const [fsWords, setFsWords] = useState<Word[]>([]);
   const [loadingWords, setLoadingWords] = useState(false);
 
+  // Load available topics from Firestore and hydrate the user's saved selection
+  useEffect(() => {
+    const load = async () => {
+      const user = auth.currentUser;
+      try {
+        // fetch topic list
+        const snap = await getDocs(collection(db, "topics"));
+        const list: Topic[] = snap.docs.map((d) => {
+          const data = d.data() as any;
+          return {
+            id: d.id,
+            name: data?.name || d.id,
+            seeds: data?.seeds || [],
+          };
+        });
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        setTopics(list);
+      } catch (e) {
+        console.log("Failed to load topics; falling back to defaults", e);
+        setTopics([
+          { id: "biology", name: "Biology", seeds: ["biology", "cell", "genetics"] },
+          { id: "climate", name: "Climate", seeds: ["climate", "carbon", "warming"] },
+          { id: "mindset", name: "Mindset", seeds: ["resilience", "focus", "growth"] },
+        ]);
+      } finally {
+        setTopicsLoading(false);
+      }
+
+      // fetch user's previous topic selections
+      if (!user) return;
+      try {
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const arr: string[] = userSnap.data()?.selectedTopics || [];
+          setSelectedTopics(new Set(arr));
+          if (arr.length) {
+            setHasStarted(true);
+          }
+        }
+      } catch (e) {
+        console.log("Failed to hydrate selectedTopics", e);
+      }
+    };
+
+    load();
+  }, []);
+
 
   useEffect(() => {
     const fetchWords = async () => {
       const user = auth.currentUser;
       if (!user) return;
-  
+      if (!hasStarted) return; // avoid prefetch until user begins
+
       // if no topics selected yet, show nothing (or show a prompt)
       if (selectedTopics.size === 0) {
         setFsWords([]);
@@ -131,7 +186,7 @@ export default function LearnScreen() {
     };
   
     fetchWords();
-  }, [selectedTopics]);
+  }, [selectedTopics, hasStarted]);
   
   
   const filteredWords = useMemo(() => {
@@ -146,7 +201,7 @@ export default function LearnScreen() {
   );
   const correctCount = progress[current.wordId]?.correct ?? 0;
   const progressPct = Math.min((correctCount / 3) * 100, 100);
-  const primaryTopic = current.topics?.[0] ?? "general";
+  const primaryTopic = current.topics?.[0] ?? Array.from(selectedTopics)[0] ?? "general";
   const categoryLabel = primaryTopic.charAt(0).toUpperCase() + primaryTopic.slice(1);
 
   const next = () => {
@@ -251,7 +306,8 @@ export default function LearnScreen() {
         </View>
 
         <View style={styles.topicGrid}>
-          {TOPICS.map((topic) => {
+          {topicsLoading && <Text style={styles.loading}>Loading topics…</Text>}
+          {!topicsLoading && topics.map((topic) => {
             const active = selectedTopics.has(topic.id);
             return (
               <Pressable
@@ -259,8 +315,15 @@ export default function LearnScreen() {
                 style={[styles.topicCard, active && styles.topicCardActive]}
                 onPress={() => toggleTopic(topic.id)}
               >
-                <Text style={[styles.topicName, active && styles.topicNameActive]}>{topic.name}</Text>
-                <Text style={styles.topicSeeds}>{topic.seeds.slice(0, 3).join(", ")}</Text>
+                <View style={styles.topicRow}>
+                  <View style={[styles.checkbox, active && styles.checkboxChecked]}>
+                    {active && <Text style={styles.checkboxMark}>✓</Text>}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.topicName, active && styles.topicNameActive]}>{topic.name}</Text>
+                    <Text style={styles.topicSeeds}>{(topic.seeds || []).slice(0, 3).join(", ")}</Text>
+                  </View>
+                </View>
               </Pressable>
             );
           })}
@@ -302,6 +365,10 @@ export default function LearnScreen() {
           <View style={[styles.topProgressFill, { width: `${((index + 1) / totalWords) * 100}%` }]} />
         </View>
       </View>
+
+      <Pressable style={styles.changeTopics} onPress={() => setHasStarted(false)}>
+        <Text style={styles.changeTopicsText}>Change topics</Text>
+      </Pressable>
 
       <View style={styles.cardShell}>
         {showSuccess ? (
@@ -463,6 +530,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   skipText: { color: "#475569", fontWeight: "700" },
+  changeTopics: {
+    alignSelf: "flex-end",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  changeTopicsText: {
+    color: "#f97316",
+    fontWeight: "800",
+    textDecorationLine: "underline",
+  },
   topicGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
