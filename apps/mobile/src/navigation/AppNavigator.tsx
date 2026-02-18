@@ -11,16 +11,22 @@ import LearnScreen from "../screens/LearnScreen";
 import ReviewScreen from "../screens/ReviewScreen";
 import GamesScreen from "../screens/GamesScreen";
 import LearnedScreen from "../screens/LearnedScreen";
+import SettingsScreen from "../screens/SettingsScreen";
+
 
 import { View, Pressable, Text, StyleSheet } from "react-native";
 
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase/firebase";
 
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+
 
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
+  Settings: undefined;
 };
 
 type TabKey = "home" | "learn" | "review" | "games" | "learned";
@@ -36,11 +42,15 @@ const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
 ];
 
 function MainTabs() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [active, setActive] = React.useState<TabKey>("home");
 
   return (
     <View style={{ flex: 1 }}>
       <View style={{ flex: 1 }}>
+      <Pressable onPress={() => navigation.navigate("Settings")} style={{ padding: 12 }}>
+        <Text>Settings</Text>
+      </Pressable>
         {active === "home" && <HomeScreen onGoLearn={() => setActive("learn")} />}
         {active === "learn" && <LearnScreen />}
         {active === "review" && <ReviewScreen />}
@@ -102,12 +112,16 @@ export default function AppNavigator() {
   return (
     <NavigationContainer>
       <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainTabs} />
-        ) : (
-          <Stack.Screen name="Login" component={LoginScreen} />
-        )}
-      </Stack.Navigator>
+  {user ? (
+    <>
+      <Stack.Screen name="Main" component={MainTabs} />
+      <Stack.Screen name="Settings" component={SettingsScreen} />
+    </>
+  ) : (
+    <Stack.Screen name="Login" component={LoginScreen} />
+  )}
+</Stack.Navigator>
+
     </NavigationContainer>
   );
 }
