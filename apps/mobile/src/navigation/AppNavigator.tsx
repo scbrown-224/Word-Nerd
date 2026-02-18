@@ -59,7 +59,36 @@ function MainTabs() {
       </View>
 
       <View style={styles.tabBar}>
-        <View style={styles.tabRow}>
+      <View style={styles.tabRow}>
+  {tabs.map((tab) => {
+    const focused = tab.key === active;
+    return (
+      <Pressable
+        key={tab.key}
+        style={[styles.tabItem, focused && styles.tabItemActive]}
+        onPress={() => setActive(tab.key)}
+        accessibilityRole="button"
+        accessibilityLabel={tab.label}
+      >
+        <Text style={[styles.tabIcon, focused && styles.tabTextActive]}>{tab.icon}</Text>
+        <Text style={[styles.tabLabel, focused && styles.tabTextActive]}>{tab.label}</Text>
+      </Pressable>
+    );
+  })}
+
+  {/* Settings icon (navigates to Stack screen) */}
+  <Pressable
+    style={styles.settingsItem}
+    onPress={() => navigation.navigate("Settings")}
+    accessibilityRole="button"
+    accessibilityLabel="Settings"
+    hitSlop={12}
+  >
+    <Text style={styles.settingsIcon}>⚙️</Text>
+  </Pressable>
+</View>
+
+        {/* <View style={styles.tabRow}>
           {tabs.map((tab) => {
             const focused = tab.key === active;
             return (
@@ -75,7 +104,7 @@ function MainTabs() {
               </Pressable>
             );
           })}
-        </View>
+        </View> */}
       </View>
     </View>
   );
@@ -154,6 +183,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
   },
+  settingsItem: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  settingsIcon: {
+    fontSize: 18,
+  },
+  
   tabItemActive: {
     // mimic “active orange” feel
   },
@@ -161,3 +201,4 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 11, color: "#6b7280" },
   tabTextActive: { color: "#ea580c", fontWeight: "800" }, // orange-600
 });
+
