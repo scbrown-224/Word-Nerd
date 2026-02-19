@@ -1,16 +1,18 @@
 // MatchGameScreen.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
   ActivityIndicator,
   Animated,
   PanResponder,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
-import { collection, getDocs, limit, query, doc, getDoc } from "firebase/firestore";
-import { db } from "../firebase/firebase"; // adjust import to your project
+import { useNavigation, useRoute } from "@react-navigation/native";
+import { collection, getDocs, getDoc, limit, query } from "firebase/firestore";
+import { db } from "../firebase/firebase"; // <-- adjust path if needed
 
 type Params = {
   poolType: "topic";
@@ -19,26 +21,14 @@ type Params = {
   timeLimitSec: number;
 };
 
-type WordDoc = {
-  wordId: string;
-  word: string;
-  definition: string;
-  example?: string | null;
-};
-
 type Pair = {
   id: string; // wordId
   word: string;
   definition: string;
 };
 
-type DropZone = {
-  id: string; // pair id
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+type Box = { x: number; y: number; width: number; height: number };
+type ZoneBox = Box & { id: string };
 
 function shuffle<T>(arr: T[]) {
   const a = [...arr];
@@ -49,33 +39,72 @@ function shuffle<T>(arr: T[]) {
   return a;
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function dist(a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
-export default function MatchGameScreen({ route, navigation }: any) {
-  const { topic, numPairs, timeLimitSec } = route.params as Params;
+function centerOf(box: Box) {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+// Animated.ValueXY helper: current = offset + value
+function getXY(v: Animated.ValueXY) {
+  // @ts-ignore RN internals
+  const x = (v.x?._value ?? 0) + (v.x?._offset ?? 0);
+  // @ts-ignore RN internals
+  const y = (v.y?._value ?? 0) + (v.y?._offset ?? 0);
+  return { x, y };
+}
+
+export default function MatchGameScreen() {
+  const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+
+  const {
+    topic = "biology",
+    numPairs = 12,
+    timeLimitSec = 60,
+    poolType = "topic",
+  } = (route.params ?? {}) as Partial<Params>;
+
+  // ---- tuning ----
+  const ROUND_SIZE = 3;
+  const MATCH_RADIUS_PX = 60; // slightly forgiving so you don't need multiple tries
 
   const [loading, setLoading] = useState(true);
-  const [pairs, setPairs] = useState<Pair[]>([]);
-  const [wordOrder, setWordOrder] = useState<Pair[]>([]);
-  const [defOrder, setDefOrder] = useState<Pair[]>([]);
-  const [matched, setMatched] = useState<Record<string, boolean>>({});
-  const [score, setScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(timeLimitSec);
   const [ended, setEnded] = useState(false);
 
-  // Drop zones measured from UI
-  const dropZonesRef = useRef<Record<string, DropZone>>({});
+  const [timeLeft, setTimeLeft] = useState(timeLimitSec);
+  const [score, setScore] = useState(0);
 
-  // Animated positions per draggable word
+  const [allPairs, setAllPairs] = useState<Pair[]>([]);
+  const [roundPairs, setRoundPairs] = useState<Pair[]>([]);
+  const [roundIndex, setRoundIndex] = useState(1);
+  const [roundCleared, setRoundCleared] = useState(false);
+
+  // ✅ state-based matching (reliable re-renders)
+  const [matchedThisRound, setMatchedThisRound] = useState<Record<string, boolean>>({});
+  const [filledWordBySlotId, setFilledWordBySlotId] = useState<Record<string, string>>({});
+
+  // Remaining queue
+  const queueRef = useRef<Pair[]>([]);
+
+  // Measurements
+  const slotZonesRef = useRef<Record<string, ZoneBox>>({});
+  const chipHomeRef = useRef<Record<string, Box>>({});
+
+  // Drag state
   const positionsRef = useRef<Record<string, Animated.ValueXY>>({});
-  const homeRef = useRef<Record<string, { x: number; y: number }>>({}); // where to snap back
+  const respondersRef = useRef<Record<string, any>>({});
 
-  const allMatched = useMemo(() => {
-    if (!pairs.length) return false;
-    return pairs.every((p) => matched[p.id]);
-  }, [pairs, matched]);
+  const totalCount = allPairs.length;
+  const totalMatched = useMemo(() => Object.keys(filledWordBySlotId).length, [filledWordBySlotId]);
+
+  const roundMatchedCount = useMemo(() => {
+    return roundPairs.reduce((acc, p) => acc + (matchedThisRound[p.id] ? 1 : 0), 0);
+  }, [roundPairs, matchedThisRound]);
 
   // Timer
   useEffect(() => {
@@ -88,17 +117,51 @@ export default function MatchGameScreen({ route, navigation }: any) {
     return () => clearTimeout(t);
   }, [timeLeft, loading, ended]);
 
-  // End conditions
-  useEffect(() => {
-    if (loading || ended) return;
-    if (allMatched) {
-      // bonus: remaining seconds
-      setScore((s) => s + timeLeft);
-      setEnded(true);
-    }
-  }, [allMatched, timeLeft, loading, ended]);
+  const initRoundState = (pairs: Pair[]) => {
+    slotZonesRef.current = {};
+    chipHomeRef.current = {};
+    respondersRef.current = {};
+    positionsRef.current = {};
 
-  // Fetch words for topic
+    for (const p of pairs) {
+      positionsRef.current[p.id] = new Animated.ValueXY({ x: 0, y: 0 });
+    }
+
+    setMatchedThisRound({});
+    setRoundCleared(false);
+  };
+
+  const endGameFinished = () => {
+    setScore((s) => s + Math.max(0, timeLeft));
+    setEnded(true);
+  };
+
+  const startRound = (pairs: Pair[], newRoundIndex: number) => {
+    setRoundPairs(pairs);
+    setRoundIndex(newRoundIndex);
+    initRoundState(pairs);
+  };
+
+  const startNextRoundNow = () => {
+    if (ended) return;
+
+    const next = queueRef.current.slice(0, ROUND_SIZE);
+    queueRef.current = queueRef.current.slice(next.length);
+
+    if (next.length === 0) {
+      endGameFinished();
+      return;
+    }
+
+    // advance round index with functional update to avoid stale closures
+    setRoundIndex((r) => {
+      const newIndex = r + 1;
+      startRound(next, newIndex);
+      return newIndex;
+    });
+  };
+
+  // Load words (fetch until enough valid pairs)
   useEffect(() => {
     let mounted = true;
 
@@ -107,60 +170,72 @@ export default function MatchGameScreen({ route, navigation }: any) {
       setEnded(false);
       setScore(0);
       setTimeLeft(timeLimitSec);
-      setMatched({});
-      dropZonesRef.current = {};
-      positionsRef.current = {};
-      homeRef.current = {};
+
+      setAllPairs([]);
+      setRoundPairs([]);
+      setRoundIndex(1);
+      setRoundCleared(false);
+
+      setMatchedThisRound({});
+      setFilledWordBySlotId({});
+      queueRef.current = [];
 
       try {
-        // /topics/{topic}/words/{wordId} contains { wordRef }
+        if (poolType !== "topic") throw new Error("Unsupported poolType (expected 'topic').");
+
+        const desiredCount = Math.max(ROUND_SIZE, Math.min(numPairs, 24));
+
         const topicWordsCol = collection(db, "topics", topic, "words");
-        const qsnap = await getDocs(query(topicWordsCol, limit(50)));
+        const qsnap = await getDocs(query(topicWordsCol, limit(180)));
+        const wordRefs = shuffle(qsnap.docs.map((d) => d.data()?.wordRef).filter(Boolean));
 
-        const wordRefs = qsnap.docs
-          .map((d) => d.data()?.wordRef)
-          .filter(Boolean);
+        const fetched: Pair[] = [];
+        const seen = new Set<string>();
 
-        // Fetch word docs (first N after shuffle)
-        const pickedRefs = shuffle(wordRefs).slice(0, clamp(numPairs, 2, 12));
+        for (const ref of wordRefs) {
+          if (fetched.length >= desiredCount) break;
 
-        const fetched: WordDoc[] = [];
-        for (const ref of pickedRefs) {
-          // wordRef is a DocumentReference to /words/{wordId}
-          const snap = await getDoc(ref);
-          if (!snap.exists()) continue;
-          const data = snap.data() as any;
-          if (!data?.word || !data?.definition) continue;
-          fetched.push({
-            wordId: data.wordId ?? snap.id,
-            word: data.word,
-            definition: data.definition,
-            example: data.example ?? null,
-          });
+          try {
+            const snap = await getDoc(ref);
+            if (!snap.exists()) continue;
+
+            const data = snap.data() as any;
+            const id = (data.wordId ?? snap.id) as string;
+            const word = data.word as string | undefined;
+            const definition = data.definition as string | undefined;
+
+            if (!id || !word || !definition) continue;
+            if (seen.has(id)) continue;
+
+            seen.add(id);
+            fetched.push({ id, word, definition });
+          } catch {
+            // skip bad refs
+          }
         }
-
-        const builtPairs: Pair[] = fetched.map((w) => ({
-          id: w.wordId,
-          word: w.word,
-          definition: w.definition,
-        }));
 
         if (!mounted) return;
 
-        setPairs(builtPairs);
-        setWordOrder(shuffle(builtPairs));
-        setDefOrder(shuffle(builtPairs));
+        const shuffledPairs = shuffle(fetched);
+        setAllPairs(shuffledPairs);
 
-        // init animated values
-        for (const p of builtPairs) {
-          positionsRef.current[p.id] = new Animated.ValueXY({ x: 0, y: 0 });
+        if (shuffledPairs.length < ROUND_SIZE) {
+          startRound(shuffledPairs, 1);
+          setEnded(true);
+          return;
         }
+
+        const first = shuffledPairs.slice(0, ROUND_SIZE);
+        const rest = shuffledPairs.slice(ROUND_SIZE);
+
+        queueRef.current = rest;
+        startRound(first, 1);
       } catch (e) {
         console.warn(e);
         if (!mounted) return;
-        setPairs([]);
-        setWordOrder([]);
-        setDefOrder([]);
+        setAllPairs([]);
+        setRoundPairs([]);
+        setEnded(true);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -170,273 +245,349 @@ export default function MatchGameScreen({ route, navigation }: any) {
     return () => {
       mounted = false;
     };
-  }, [topic, numPairs, timeLimitSec]);
+  }, [topic, numPairs, timeLimitSec, poolType]);
 
-  const restart = () => {
-    // simplest: re-navigate to same route with same params
-    navigation.replace("MatchGame", route.params);
-  };
+  // ✅ Effect 1: detect round completion (state-based, reliable)
+  useEffect(() => {
+    if (loading || ended) return;
+    if (roundPairs.length === 0) return;
+    if (roundCleared) return;
 
-  const tryDrop = (pairId: string) => {
-    const pos = positionsRef.current[pairId];
-    const zones = dropZonesRef.current;
+    const allDone = roundPairs.every((p) => matchedThisRound[p.id]);
+    if (allDone) {
+      setRoundCleared(true);
+      setScore((s) => s + 15);
+    }
+  }, [matchedThisRound, roundPairs, roundCleared, loading, ended]);
 
-    // We treat the dragged "chip" position as relative translation.
-    // We’ll approximate hit-testing by using current translation and comparing
-    // to zone boxes in the same screen space (good enough for a fun game).
-    const dx = (pos as any).__getValue().x as number;
-    const dy = (pos as any).__getValue().y as number;
+  // ✅ Effect 2: when roundCleared flips true, schedule the next round
+  useEffect(() => {
+    if (!roundCleared) return;
+    if (ended) return;
 
-    // Find nearest zone by overlap test
-    // (We’ll just check if chip center landed inside zone)
-    // We don't have chip absolute coords, so we store "home" positions as screen coords.
-    const home = homeRef.current[pairId];
-    if (!home) return { ok: false as const };
+    const t = setTimeout(() => {
+      startNextRoundNow();
+    }, 650);
 
-    const chipCenterX = home.x + dx + 60; // ~half chip width
-    const chipCenterY = home.y + dy + 18; // ~half chip height
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundCleared, ended]);
 
-    let hit: DropZone | null = null;
-    for (const z of Object.values(zones)) {
-      const inside =
-        chipCenterX >= z.x &&
-        chipCenterX <= z.x + z.width &&
-        chipCenterY >= z.y &&
-        chipCenterY <= z.y + z.height;
-      if (inside) {
-        hit = z;
-        break;
-      }
+  const restart = () =>
+    navigation.replace("MatchGame", {
+      poolType,
+      topic,
+      numPairs,
+      timeLimitSec,
+    });
+
+  /**
+   * Drop logic:
+   * - find nearest open slot among the 3 definitions
+   * - must be within MATCH_RADIUS of that slot CENTER
+   * - correct only if nearest slotId === wordId
+   */
+  const tryDrop = (wordId: string) => {
+    const slotIds = roundPairs.map((p) => p.id);
+
+    for (const id of slotIds) {
+      if (!slotZonesRef.current[id]) return { status: "not_ready" as const };
+    }
+    const chipHome = chipHomeRef.current[wordId];
+    if (!chipHome) return { status: "not_ready" as const };
+
+    const pos = positionsRef.current[wordId];
+    const { x: dx, y: dy } = getXY(pos);
+
+    const chipNow: Box = {
+      x: chipHome.x + dx,
+      y: chipHome.y + dy,
+      width: chipHome.width,
+      height: chipHome.height,
+    };
+    const chipCenter = centerOf(chipNow);
+
+    let best: { slotId: string; d: number } | null = null;
+
+    for (const id of slotIds) {
+      if (matchedThisRound[id]) continue; // filled slot
+      const slot = slotZonesRef.current[id];
+      const d = dist(chipCenter, centerOf(slot));
+      if (!best || d < best.d) best = { slotId: id, d };
     }
 
-    if (!hit) return { ok: false as const };
+    if (!best) return { status: "miss" as const };
+    if (best.d > MATCH_RADIUS_PX) return { status: "miss" as const };
+    if (best.slotId !== wordId) return { status: "wrong_slot" as const };
 
-    const correct = hit.id === pairId;
-    return { ok: correct as const, zoneId: hit.id };
+    return { status: "ok" as const, slotId: best.slotId };
   };
 
-  const makePanResponder = (pairId: string) =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => !ended && !matched[pairId],
-      onPanResponderMove: Animated.event([null, { dx: positionsRef.current[pairId].x, dy: positionsRef.current[pairId].y }], {
+  const getPanResponder = (wordId: string) => {
+    if (respondersRef.current[wordId]) return respondersRef.current[wordId];
+
+    const pos = positionsRef.current[wordId];
+
+    const responder = PanResponder.create({
+      onStartShouldSetPanResponder: () => !ended && !roundCleared && !matchedThisRound[wordId],
+      onMoveShouldSetPanResponder: () => !ended && !roundCleared && !matchedThisRound[wordId],
+
+      onPanResponderGrant: () => {
+        pos.stopAnimation();
+        const { x, y } = getXY(pos);
+        pos.setOffset({ x, y });
+        pos.setValue({ x: 0, y: 0 });
+      },
+
+      onPanResponderMove: Animated.event([null, { dx: pos.x, dy: pos.y }], {
         useNativeDriver: false,
       }),
-      onPanResponderRelease: () => {
-        const res = tryDrop(pairId);
 
-        if (res.ok) {
-          setMatched((m) => ({ ...m, [pairId]: true }));
+      onPanResponderRelease: () => {
+        pos.flattenOffset();
+
+        const res = tryDrop(wordId);
+
+        if (res.status === "ok") {
+          const pair = roundPairs.find((p) => p.id === wordId);
+
+          setMatchedThisRound((prev) => ({ ...prev, [wordId]: true }));
+          if (pair) setFilledWordBySlotId((prev) => ({ ...prev, [wordId]: pair.word }));
+
           setScore((s) => s + 10);
 
-          // snap chip toward the zone (simple: animate to 0,0 then hide it via matched state)
-          Animated.spring(positionsRef.current[pairId], {
-            toValue: { x: 0, y: 0 },
-            useNativeDriver: false,
-          }).start();
-        } else {
-          setScore((s) => s - 2);
-          Animated.spring(positionsRef.current[pairId], {
-            toValue: { x: 0, y: 0 },
-            useNativeDriver: false,
-          }).start();
+          Animated.spring(pos, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+          return;
         }
+
+        if (res.status === "not_ready") {
+          Animated.spring(pos, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+          return;
+        }
+
+        setScore((s) => s - 2);
+        Animated.spring(pos, {
+          toValue: { x: 0, y: 0 },
+          useNativeDriver: false,
+          friction: 7,
+          tension: 60,
+        }).start();
       },
     });
 
+    respondersRef.current[wordId] = responder;
+    return responder;
+  };
+
   if (loading) {
     return (
-      <View style={[styles.screen, { justifyContent: "center", alignItems: "center" }]}>
-        <ActivityIndicator />
-        <Text style={{ marginTop: 10, color: "#475569" }}>Loading words…</Text>
-      </View>
+      <SafeAreaView style={styles.safe}>
+        <View style={[styles.screen, { justifyContent: "center", alignItems: "center" }]}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 10, color: "#475569" }}>Loading words…</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.screen}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.hTitle}>Match</Text>
-          <Text style={styles.hSub}>{topic} • {pairs.length} pairs</Text>
-        </View>
-        <View style={styles.stats}>
-          <View style={styles.statPill}>
-            <Text style={styles.statLabel}>Time</Text>
-            <Text style={styles.statValue}>{timeLeft}s</Text>
-          </View>
-          <View style={styles.statPill}>
-            <Text style={styles.statLabel}>Score</Text>
-            <Text style={styles.statValue}>{score}</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Board */}
-      <View style={styles.board}>
-        {/* Left: draggable words */}
-        <View style={styles.col}>
-          <Text style={styles.colTitle}>Words</Text>
-
-          {wordOrder.map((p) => {
-            const pan = makePanResponder(p.id);
-            const pos = positionsRef.current[p.id];
-            const isDone = !!matched[p.id];
-
-            return (
-              <View
-                key={p.id}
-                onLayout={(e) => {
-                  // store absolute position approximation via measureInWindow
-                  // NOTE: we need measureInWindow; easiest is ref + measure.
-                }}
-                style={{ marginBottom: 12 }}
-              >
-                {!isDone ? (
-                  <DraggableChip
-                    id={p.id}
-                    label={p.word}
-                    position={pos}
-                    panHandlers={pan.panHandlers}
-                    onMeasuredHome={(home) => (homeRef.current[p.id] = home)}
-                  />
-                ) : (
-                  <View style={[styles.chip, styles.chipDone]}>
-                    <Text style={styles.chipTextDone}>{p.word}</Text>
-                  </View>
-                )}
-              </View>
-            );
-          })}
-        </View>
-
-        {/* Right: drop zones */}
-        <View style={styles.col}>
-          <Text style={styles.colTitle}>Definitions</Text>
-
-          {defOrder.map((p) => {
-            const isTaken = !!matched[p.id];
-
-            return (
-              <View
-                key={p.id}
-                style={[styles.zone, isTaken && styles.zoneDone]}
-                onLayout={(e) => {
-                  // capture box in window coords
-                  // Using measureInWindow via ref is more reliable than layout x/y.
-                }}
-              >
-                <DropZoneCard
-                  id={p.id}
-                  text={p.definition}
-                  disabled={isTaken}
-                  onMeasured={(box) => (dropZonesRef.current[p.id] = box)}
-                />
-              </View>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* End overlay */}
-      {ended && (
-        <View style={styles.overlay}>
-          <View style={styles.overlayCard}>
-            <Text style={styles.overlayTitle}>{allMatched ? "Nice!" : "Time’s up"}</Text>
-            <Text style={styles.overlayText}>Score: <Text style={{ fontWeight: "900" }}>{score}</Text></Text>
-            <Text style={styles.overlayText}>
-              Matched: {Object.keys(matched).length}/{pairs.length}
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.screen}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={styles.hTitle}>Match</Text>
+            <Text style={styles.hSub}>
+              {topic} • Round {roundIndex} • {totalMatched}/{Math.max(1, totalCount)} matched
             </Text>
+          </View>
 
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
-              <Pressable style={styles.secondaryBtn} onPress={() => navigation.goBack()}>
-                <Text style={styles.secondaryText}>Back</Text>
-              </Pressable>
-              <Pressable style={styles.primaryBtn} onPress={restart}>
-                <Text style={styles.primaryBtnText}>Play again</Text>
-              </Pressable>
+          <View style={styles.stats}>
+            <View style={styles.statPill}>
+              <Text style={styles.statLabel}>Time</Text>
+              <Text style={styles.statValue}>{timeLeft}s</Text>
+            </View>
+            <View style={styles.statPill}>
+              <Text style={styles.statLabel}>Score</Text>
+              <Text style={styles.statValue}>{score}</Text>
             </View>
           </View>
         </View>
-      )}
-    </View>
+
+        {/* Definitions (3) */}
+        <View style={styles.defsCard}>
+          <Text style={styles.sectionTitle}>Definitions</Text>
+
+          <View style={{ gap: 12 }}>
+            {roundPairs.map((p) => {
+              const done = !!matchedThisRound[p.id];
+              const filled = filledWordBySlotId[p.id] ?? null;
+
+              return (
+                <DefZoneWithSlot
+                  key={p.id}
+                  id={p.id}
+                  definition={p.definition}
+                  filledWord={filled}
+                  done={done}
+                  onMeasuredSlot={(box) => (slotZonesRef.current[p.id] = box)}
+                />
+              );
+            })}
+          </View>
+
+          <Text style={styles.helperText}>
+            {roundMatchedCount}/{ROUND_SIZE} matched — match all {ROUND_SIZE} to unlock the next set.
+          </Text>
+        </View>
+
+        {/* Words (3) */}
+        <View style={styles.tray}>
+          <Text style={styles.sectionTitle}>Words</Text>
+
+          <View style={styles.trayRow}>
+            {roundPairs.map((p) => {
+              const pos = positionsRef.current[p.id];
+              const pan = getPanResponder(p.id);
+              const disabled = ended || roundCleared || !!matchedThisRound[p.id];
+
+              return (
+                <DraggableChip
+                  key={p.id}
+                  id={p.id}
+                  label={p.word}
+                  position={pos}
+                  disabled={disabled}
+                  panHandlers={pan.panHandlers}
+                  onMeasuredHome={(box) => (chipHomeRef.current[p.id] = box)}
+                />
+              );
+            })}
+          </View>
+
+          {roundCleared && !ended && (
+            <View style={styles.roundBanner}>
+              <Text style={styles.roundBannerText}>Round cleared ✅</Text>
+            </View>
+          )}
+        </View>
+
+        {/* End overlay */}
+        {ended && (
+          <View style={styles.overlay}>
+            <View style={styles.overlayCard}>
+              <Text style={styles.overlayTitle}>{timeLeft <= 0 ? "Time’s up" : "Finished!"}</Text>
+              <Text style={styles.overlayText}>
+                Score: <Text style={{ fontWeight: "900" }}>{score}</Text>
+              </Text>
+              <Text style={styles.overlayText}>
+                Matched: {totalMatched}/{Math.max(1, totalCount)}
+              </Text>
+
+              <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
+                <Pressable style={styles.secondaryBtn} onPress={() => navigation.goBack()}>
+                  <Text style={styles.secondaryText}>Back</Text>
+                </Pressable>
+                <Pressable style={styles.primaryBtn} onPress={restart}>
+                  <Text style={styles.primaryBtnText}>Play again</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+      </View>
+    </SafeAreaView>
   );
 }
 
-/** Draggable chip that measures its “home” location in window coords */
 function DraggableChip({
-  id,
   label,
   position,
   panHandlers,
+  disabled,
   onMeasuredHome,
 }: {
   id: string;
   label: string;
   position: Animated.ValueXY;
   panHandlers: any;
-  onMeasuredHome: (home: { x: number; y: number }) => void;
+  disabled: boolean;
+  onMeasuredHome: (box: Box) => void;
 }) {
   const ref = useRef<View>(null);
 
-  useEffect(() => {
-    // measure after mount
-    const t = setTimeout(() => {
-      (ref.current as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
-        onMeasuredHome({ x, y });
+  const measure = () => {
+    requestAnimationFrame(() => {
+      (ref.current as any)?.measureInWindow?.((x: number, y: number, width: number, height: number) => {
+        onMeasuredHome({ x, y, width, height });
       });
-    }, 50);
-    return () => clearTimeout(t);
-  }, [onMeasuredHome]);
+    });
+  };
 
   return (
     <Animated.View
       ref={ref as any}
-      {...panHandlers}
+      onLayout={measure}
+      {...(disabled ? {} : panHandlers)}
       style={[
         styles.chip,
-        {
-          transform: position.getTranslateTransform(),
-        },
+        disabled && styles.chipDisabled,
+        { transform: position.getTranslateTransform() },
       ]}
     >
-      <Text style={styles.chipText}>{label}</Text>
+      {/* ✅ allow wrapping to 2 lines (no ellipses) */}
+      <Text style={[styles.chipText, disabled && styles.chipTextDisabled]} numberOfLines={2}>
+        {label}
+      </Text>
     </Animated.View>
   );
 }
 
-/** Drop zone card that measures itself in window coords */
-function DropZoneCard({
+function DefZoneWithSlot({
   id,
-  text,
-  disabled,
-  onMeasured,
+  definition,
+  filledWord,
+  done,
+  onMeasuredSlot,
 }: {
   id: string;
-  text: string;
-  disabled: boolean;
-  onMeasured: (box: { id: string; x: number; y: number; width: number; height: number }) => void;
+  definition: string;
+  filledWord: string | null;
+  done: boolean;
+  onMeasuredSlot: (box: ZoneBox) => void;
 }) {
-  const ref = useRef<View>(null);
+  const slotRef = useRef<View>(null);
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      (ref.current as any)?.measureInWindow?.((x: number, y: number, width: number, height: number) => {
-        onMeasured({ id, x, y, width, height });
+  const measureSlot = () => {
+    requestAnimationFrame(() => {
+      (slotRef.current as any)?.measureInWindow?.((x: number, y: number, width: number, height: number) => {
+        onMeasuredSlot({ id, x, y, width, height });
       });
-    }, 50);
-    return () => clearTimeout(t);
-  }, [id, onMeasured]);
+    });
+  };
 
   return (
-    <View ref={ref as any} style={{ opacity: disabled ? 0.6 : 1 }}>
-      <Text style={styles.zoneText}>{text}</Text>
+    <View style={[styles.zoneCard, done && styles.zoneCardDone]}>
+      <Text style={styles.zoneText}>{definition}</Text>
+
+      <View ref={slotRef as any} onLayout={measureSlot} style={[styles.dropSlot, done && styles.dropSlotDone]}>
+        {filledWord ? <Text style={styles.filledWord}>{filledWord}</Text> : <Text style={styles.dropHint}>Drop word here</Text>}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#fff7ed", padding: 16 },
+  safe: { flex: 1, backgroundColor: "#fff7ed" },
+
+  screen: {
+    flex: 1,
+    backgroundColor: "#fff7ed",
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 10,
+  },
+
   header: {
     backgroundColor: "white",
     borderRadius: 20,
@@ -449,6 +600,7 @@ const styles = StyleSheet.create({
   },
   hTitle: { fontSize: 18, fontWeight: "900", color: "#0f172a" },
   hSub: { color: "#64748b", marginTop: 2 },
+
   stats: { flexDirection: "row", gap: 10 },
   statPill: {
     paddingVertical: 10,
@@ -462,41 +614,92 @@ const styles = StyleSheet.create({
   statLabel: { color: "#9a3412", fontWeight: "800", fontSize: 12 },
   statValue: { color: "#0f172a", fontWeight: "900", marginTop: 2 },
 
-  board: { flex: 1, flexDirection: "row", gap: 14, marginTop: 14 },
-  col: {
-    flex: 1,
+  defsCard: {
+    marginTop: 12,
     backgroundColor: "white",
     borderRadius: 20,
     padding: 14,
     borderWidth: 1,
     borderColor: "#ffedd5",
   },
-  colTitle: { fontWeight: "900", color: "#0f172a", marginBottom: 10 },
+  sectionTitle: { fontWeight: "900", color: "#0f172a", marginBottom: 10 },
 
-  chip: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    backgroundColor: "#f97316",
-    borderWidth: 1,
-    borderColor: "#f97316",
-  },
-  chipText: { color: "white", fontWeight: "900" },
-  chipDone: { backgroundColor: "#e2e8f0", borderColor: "#cbd5e1" },
-  chipTextDone: { color: "#334155", fontWeight: "900" },
-
-  zone: {
+  zoneCard: {
     padding: 12,
     borderRadius: 16,
     backgroundColor: "#fff7ed",
     borderWidth: 1,
     borderColor: "#fed7aa",
-    marginBottom: 12,
-    minHeight: 64,
+    gap: 10,
+  },
+  zoneCardDone: { backgroundColor: "#dcfce7", borderColor: "#86efac" },
+  zoneText: { color: "#0f172a", fontWeight: "700" },
+
+  dropSlot: {
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    borderColor: "#fb923c",
+    backgroundColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  dropSlotDone: {
+    borderStyle: "solid",
+    borderColor: "#22c55e",
+    backgroundColor: "#f0fdf4",
+  },
+
+  dropHint: { color: "#94a3b8", fontWeight: "800" },
+  filledWord: { color: "#0f172a", fontWeight: "900" },
+
+  helperText: { marginTop: 10, color: "#64748b", fontWeight: "700" },
+
+  tray: {
+    marginTop: 12,
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#ffedd5",
+  },
+
+  trayRow: { flexDirection: "row", gap: 10, justifyContent: "space-between" },
+
+  chip: {
+    flex: 1,
+    minHeight: 54, // ✅ space for 2 lines
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    backgroundColor: "#f97316",
+    borderWidth: 1,
+    borderColor: "#f97316",
+    alignItems: "center",
     justifyContent: "center",
   },
-  zoneDone: { backgroundColor: "#dcfce7", borderColor: "#86efac" },
-  zoneText: { color: "#0f172a", fontWeight: "700" },
+  chipDisabled: { backgroundColor: "#e2e8f0", borderColor: "#cbd5e1" },
+
+  chipText: {
+    color: "white",
+    fontWeight: "900",
+    fontSize: 13,
+    textAlign: "center",
+  },
+  chipTextDisabled: { color: "#334155" },
+
+  roundBanner: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: "#dcfce7",
+    borderWidth: 1,
+    borderColor: "#86efac",
+    alignItems: "center",
+  },
+  roundBannerText: { color: "#166534", fontWeight: "900" },
 
   overlay: {
     ...StyleSheet.absoluteFillObject,
@@ -527,6 +730,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff7ed",
   },
   secondaryText: { fontWeight: "900", color: "#9a3412" },
-  primaryBtn: { flex: 1, padding: 12, borderRadius: 14, backgroundColor: "#f97316", alignItems: "center" },
+
+  primaryBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#f97316",
+    alignItems: "center",
+  },
   primaryBtnText: { color: "white", fontWeight: "900" },
 });
