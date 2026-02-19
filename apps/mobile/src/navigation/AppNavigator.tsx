@@ -11,12 +11,22 @@ import LearnScreen from "../screens/LearnScreen";
 import ReviewScreen from "../screens/ReviewScreen";
 import GamesScreen from "../screens/GamesScreen";
 import LearnedScreen from "../screens/LearnedScreen";
+import SettingsScreen from "../screens/SettingsScreen";
+
 
 import { View, Pressable, Text, StyleSheet } from "react-native";
+
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../firebase/firebase";
+
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+
 
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
+  Settings: undefined;
 };
 
 type TabKey = "home" | "learn" | "review" | "games" | "learned";
@@ -32,11 +42,15 @@ const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
 ];
 
 function MainTabs() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [active, setActive] = React.useState<TabKey>("home");
 
   return (
     <View style={{ flex: 1 }}>
       <View style={{ flex: 1 }}>
+      <Pressable onPress={() => navigation.navigate("Settings")} style={{ padding: 12 }}>
+        <Text>Settings</Text>
+      </Pressable>
         {active === "home" && <HomeScreen onGoLearn={() => setActive("learn")} />}
         {active === "learn" && <LearnScreen />}
         {active === "review" && <ReviewScreen />}
@@ -45,7 +59,36 @@ function MainTabs() {
       </View>
 
       <View style={styles.tabBar}>
-        <View style={styles.tabRow}>
+      <View style={styles.tabRow}>
+  {tabs.map((tab) => {
+    const focused = tab.key === active;
+    return (
+      <Pressable
+        key={tab.key}
+        style={[styles.tabItem, focused && styles.tabItemActive]}
+        onPress={() => setActive(tab.key)}
+        accessibilityRole="button"
+        accessibilityLabel={tab.label}
+      >
+        <Text style={[styles.tabIcon, focused && styles.tabTextActive]}>{tab.icon}</Text>
+        <Text style={[styles.tabLabel, focused && styles.tabTextActive]}>{tab.label}</Text>
+      </Pressable>
+    );
+  })}
+
+  {/* Settings icon (navigates to Stack screen) */}
+  <Pressable
+    style={styles.settingsItem}
+    onPress={() => navigation.navigate("Settings")}
+    accessibilityRole="button"
+    accessibilityLabel="Settings"
+    hitSlop={12}
+  >
+    <Text style={styles.settingsIcon}>⚙️</Text>
+  </Pressable>
+</View>
+
+        {/* <View style={styles.tabRow}>
           {tabs.map((tab) => {
             const focused = tab.key === active;
             return (
@@ -61,7 +104,7 @@ function MainTabs() {
               </Pressable>
             );
           })}
-        </View>
+        </View> */}
       </View>
     </View>
   );
@@ -72,24 +115,42 @@ export default function AppNavigator() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
+  
+      if (u) {
+        const userRef = doc(db, "users", u.uid);
+        const snap = await getDoc(userRef);
+  
+        if (!snap.exists()) {
+          await setDoc(userRef, {
+            email: u.email,
+            createdAt: serverTimestamp(),
+          });
+        }
+      }
     });
+  
     return unsub;
   }, []);
+  
 
   if (loading) return null;
 
   return (
     <NavigationContainer>
       <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainTabs} />
-        ) : (
-          <Stack.Screen name="Login" component={LoginScreen} />
-        )}
-      </Stack.Navigator>
+  {user ? (
+    <>
+      <Stack.Screen name="Main" component={MainTabs} />
+      <Stack.Screen name="Settings" component={SettingsScreen} />
+    </>
+  ) : (
+    <Stack.Screen name="Login" component={LoginScreen} />
+  )}
+</Stack.Navigator>
+
     </NavigationContainer>
   );
 }
@@ -122,6 +183,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
   },
+  settingsItem: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  settingsIcon: {
+    fontSize: 18,
+  },
+  
   tabItemActive: {
     // mimic “active orange” feel
   },
@@ -129,3 +201,4 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 11, color: "#6b7280" },
   tabTextActive: { color: "#ea580c", fontWeight: "800" }, // orange-600
 });
+
