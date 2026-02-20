@@ -126,7 +126,11 @@ export default function AppNavigator() {
   {user ? (
     <>
       <Stack.Screen name="Main" component={MainTabs} />
-      <Stack.Screen name="Settings" component={SettingsScreen} />
+      <Stack.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{ headerShown: true, title: "Settings" }}
+      />
     </>
   ) : (
     <Stack.Screen name="Login" component={LoginScreen} />
@@ -211,7 +215,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.75)",
   },
   floatingGearIcon: {
-    fontSize: 40,
+    fontSize: 38,
   },
   tabIcon: { fontSize: 18, color: "#6b7280" }, // gray-500
   tabLabel: { fontSize: 11, color: "#6b7280" },
