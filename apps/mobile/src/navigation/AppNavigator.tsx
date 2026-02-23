@@ -26,10 +26,8 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
-  MatchGame: MatchSettings;
   Settings: undefined;
 };
-
 
 type TabKey = "home" | "learn" | "review" | "games" | "learned";
 
@@ -124,19 +122,16 @@ export default function AppNavigator() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false,  contentStyle: { paddingTop: 30, backgroundColor: "#fff7ed" }}}>
+      <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
   {user ? (
     <>
-          <>
-        <Stack.Screen name="Main" component={MainTabs} />
+      <Stack.Screen name="Main" component={MainTabs} />
       <Stack.Screen
         name="Settings"
         component={SettingsScreen}
         options={{ headerShown: true, title: "Settings" }}
       />
     </>
-            <Stack.Screen name="MatchGame" component={MatchGameScreen} />
-          </>
   ) : (
     <Stack.Screen name="Login" component={LoginScreen} />
   )}
