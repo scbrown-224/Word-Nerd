@@ -47,10 +47,19 @@ function MainTabs() {
 
   return (
     <View style={{ flex: 1 }}>
-      <View style={{ flex: 1 }}>
-      <Pressable onPress={() => navigation.navigate("Settings")} style={{ padding: 12 }}>
-        <Text>Settings</Text>
-      </Pressable>
+      {/* Main content area */}
+      <View style={{ flex: 1, position: "relative" }}>
+        {/* Floating Settings gear (only show on main tabs, not on Settings screen) */}
+        <Pressable
+          onPress={() => navigation.navigate("Settings")}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          hitSlop={12}
+          style={styles.floatingGearButton}
+        >
+          <Text style={styles.floatingGearIcon}>⚙️</Text>
+        </Pressable>
+
         {active === "home" && <HomeScreen onGoLearn={() => setActive("learn")} />}
         {active === "learn" && <LearnScreen />}
         {active === "review" && <ReviewScreen />}
@@ -58,37 +67,9 @@ function MainTabs() {
         {active === "learned" && <LearnedScreen />}
       </View>
 
+      {/* Bottom nav bar (NO gear here now) */}
       <View style={styles.tabBar}>
-      <View style={styles.tabRow}>
-  {tabs.map((tab) => {
-    const focused = tab.key === active;
-    return (
-      <Pressable
-        key={tab.key}
-        style={[styles.tabItem, focused && styles.tabItemActive]}
-        onPress={() => setActive(tab.key)}
-        accessibilityRole="button"
-        accessibilityLabel={tab.label}
-      >
-        <Text style={[styles.tabIcon, focused && styles.tabTextActive]}>{tab.icon}</Text>
-        <Text style={[styles.tabLabel, focused && styles.tabTextActive]}>{tab.label}</Text>
-      </Pressable>
-    );
-  })}
-
-  {/* Settings icon (navigates to Stack screen) */}
-  <Pressable
-    style={styles.settingsItem}
-    onPress={() => navigation.navigate("Settings")}
-    accessibilityRole="button"
-    accessibilityLabel="Settings"
-    hitSlop={12}
-  >
-    <Text style={styles.settingsIcon}>⚙️</Text>
-  </Pressable>
-</View>
-
-        {/* <View style={styles.tabRow}>
+        <View style={styles.tabRow}>
           {tabs.map((tab) => {
             const focused = tab.key === active;
             return (
@@ -98,13 +79,14 @@ function MainTabs() {
                 onPress={() => setActive(tab.key)}
                 accessibilityRole="button"
                 accessibilityLabel={tab.label}
+                hitSlop={8}
               >
                 <Text style={[styles.tabIcon, focused && styles.tabTextActive]}>{tab.icon}</Text>
                 <Text style={[styles.tabLabel, focused && styles.tabTextActive]}>{tab.label}</Text>
               </Pressable>
             );
           })}
-        </View> */}
+        </View>
       </View>
     </View>
   );
@@ -144,7 +126,11 @@ export default function AppNavigator() {
   {user ? (
     <>
       <Stack.Screen name="Main" component={MainTabs} />
-      <Stack.Screen name="Settings" component={SettingsScreen} />
+      <Stack.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{ headerShown: true, title: "Settings" }}
+      />
     </>
   ) : (
     <Stack.Screen name="Login" component={LoginScreen} />
@@ -183,19 +169,53 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
   },
-  settingsItem: {
+  topBar: {
+    height: 56,
+    backgroundColor: "#fed7aa", // same orange-200-ish
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: "#fdba74", // orange-300-ish
   },
-  settingsIcon: {
+  topBarTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#9a3412", // orange-800-ish
+  },
+  topBarGearButton: {
+    position: "absolute",
+    right: 12,
+    height: 40,
+    width: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+  },
+  topBarGear: {
     fontSize: 18,
   },
-  
   tabItemActive: {
     // mimic “active orange” feel
+  },
+  floatingGearButton: {
+    position: "absolute",
+    top: 16,       // adjust if you want it higher/lower
+    right: 16,
+    zIndex: 50,
+    elevation: 50, // helps on Android
+    height: 50,
+    width: 50,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  
+    // subtle “on top of tan” look without creating a new bar
+    backgroundColor: "rgba(255,255,255,0.75)",
+  },
+  floatingGearIcon: {
+    fontSize: 38,
   },
   tabIcon: { fontSize: 18, color: "#6b7280" }, // gray-500
   tabLabel: { fontSize: 11, color: "#6b7280" },
