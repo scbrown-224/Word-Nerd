@@ -45,6 +45,8 @@ async function main() {
   const db = admin.firestore();
   const FieldValue = admin.firestore.FieldValue;
 
+  
+
   console.log(`→ Seeding topic: ${topic}`);
 
   const candidates = await fetchCandidates(topic);
@@ -80,9 +82,11 @@ async function main() {
 
       const wordData = {
         ...enrichedWord,
+        topics: FieldValue.arrayUnion(topic), // ✅ add topic membership on global word
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       };
+      
 
       const topicData = {
         name: topic,
@@ -167,15 +171,26 @@ async function enrichWord(word) {
 
   if (!meanings.length) return null;
 
-  const firstDef = meanings[0].definitions[0];
+  // Prefer a definition that includes an example; otherwise fall back to the first definition
+  const flattenDefs = meanings.flatMap((m) =>
+    (m.definitions || []).map((d) => ({
+      partOfSpeech: m.partOfSpeech || "unknown",
+      definition: d.definition,
+      example: d.example || null,
+    }))
+  );
+  const withExample = flattenDefs.find((d) => d.example);
+  const chosen = withExample || flattenDefs[0];
+  if (!chosen) return null;
+
   const audioUrl = firstAudio(entry.phonetics);
 
   return {
     word,
     wordId: word.toLowerCase(),
     meanings,
-    definition: firstDef.definition,
-    example: firstDef.example || null,
+    definition: chosen.definition,
+    example: chosen.example || null,
     audioUrl: audioUrl || null,
   };
 }
