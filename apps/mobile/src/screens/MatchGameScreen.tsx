@@ -84,7 +84,10 @@ export default function MatchGameScreen() {
   const [roundIndex, setRoundIndex] = useState(1);
   const [roundCleared, setRoundCleared] = useState(false);
 
-  // ✅ state-based matching (reliable re-renders)
+  // Used to scope responders to a round so old responders can’t reuse wiped positions
+  const [roundKey, setRoundKey] = useState(0);
+
+  // State-based matching 
   const [matchedThisRound, setMatchedThisRound] = useState<Record<string, boolean>>({});
   const [filledWordBySlotId, setFilledWordBySlotId] = useState<Record<string, string>>({});
 
@@ -121,8 +124,10 @@ export default function MatchGameScreen() {
     slotZonesRef.current = {};
     chipHomeRef.current = {};
     respondersRef.current = {};
-    positionsRef.current = {};
+    setRoundKey((k) => k + 1);
 
+    // reset positions
+    positionsRef.current = {};
     for (const p of pairs) {
       positionsRef.current[p.id] = new Animated.ValueXY({ x: 0, y: 0 });
     }
@@ -247,7 +252,6 @@ export default function MatchGameScreen() {
     };
   }, [topic, numPairs, timeLimitSec, poolType]);
 
-  // ✅ Effect 1: detect round completion (state-based, reliable)
   useEffect(() => {
     if (loading || ended) return;
     if (roundPairs.length === 0) return;
@@ -260,7 +264,6 @@ export default function MatchGameScreen() {
     }
   }, [matchedThisRound, roundPairs, roundCleared, loading, ended]);
 
-  // ✅ Effect 2: when roundCleared flips true, schedule the next round
   useEffect(() => {
     if (!roundCleared) return;
     if (ended) return;
@@ -297,6 +300,8 @@ export default function MatchGameScreen() {
     if (!chipHome) return { status: "not_ready" as const };
 
     const pos = positionsRef.current[wordId];
+    if (!pos) return { status: "not_ready" as const }; // ✅ extra guard
+
     const { x: dx, y: dy } = getXY(pos);
 
     const chipNow: Box = {
@@ -324,8 +329,12 @@ export default function MatchGameScreen() {
   };
 
   const getPanResponder = (wordId: string) => {
-    if (respondersRef.current[wordId]) return respondersRef.current[wordId];
+    const key = `${roundKey}:${wordId}`;
+    if (respondersRef.current[key]) return respondersRef.current[key];
 
+    if (!positionsRef.current[wordId]) {
+      positionsRef.current[wordId] = new Animated.ValueXY({ x: 0, y: 0 });
+    }
     const pos = positionsRef.current[wordId];
 
     const responder = PanResponder.create({
@@ -375,7 +384,7 @@ export default function MatchGameScreen() {
       },
     });
 
-    respondersRef.current[wordId] = responder;
+    respondersRef.current[key] = responder;
     return responder;
   };
 
@@ -447,7 +456,11 @@ export default function MatchGameScreen() {
 
           <View style={styles.trayRow}>
             {roundPairs.map((p) => {
-              const pos = positionsRef.current[p.id];
+              // lazy-init so we never pass undefined position
+              const pos =
+                positionsRef.current[p.id] ??
+                (positionsRef.current[p.id] = new Animated.ValueXY({ x: 0, y: 0 }));
+
               const pan = getPanResponder(p.id);
               const disabled = ended || roundCleared || !!matchedThisRound[p.id];
 
@@ -535,7 +548,7 @@ function DraggableChip({
         { transform: position.getTranslateTransform() },
       ]}
     >
-      {/* ✅ allow wrapping to 2 lines (no ellipses) */}
+      {/* allow wrapping to 2 lines (no ellipses) */}
       <Text style={[styles.chipText, disabled && styles.chipTextDisabled]} numberOfLines={2}>
         {label}
       </Text>
@@ -570,8 +583,16 @@ function DefZoneWithSlot({
     <View style={[styles.zoneCard, done && styles.zoneCardDone]}>
       <Text style={styles.zoneText}>{definition}</Text>
 
-      <View ref={slotRef as any} onLayout={measureSlot} style={[styles.dropSlot, done && styles.dropSlotDone]}>
-        {filledWord ? <Text style={styles.filledWord}>{filledWord}</Text> : <Text style={styles.dropHint}>Drop word here</Text>}
+      <View
+        ref={slotRef as any}
+        onLayout={measureSlot}
+        style={[styles.dropSlot, done && styles.dropSlotDone]}
+      >
+        {filledWord ? (
+          <Text style={styles.filledWord}>{filledWord}</Text>
+        ) : (
+          <Text style={styles.dropHint}>Drop word here</Text>
+        )}
       </View>
     </View>
   );
@@ -670,7 +691,7 @@ const styles = StyleSheet.create({
 
   chip: {
     flex: 1,
-    minHeight: 54, // ✅ space for 2 lines
+    minHeight: 54,
     paddingVertical: 10,
     paddingHorizontal: 10,
     borderRadius: 16,
@@ -682,12 +703,7 @@ const styles = StyleSheet.create({
   },
   chipDisabled: { backgroundColor: "#e2e8f0", borderColor: "#cbd5e1" },
 
-  chipText: {
-    color: "white",
-    fontWeight: "900",
-    fontSize: 13,
-    textAlign: "center",
-  },
+  chipText: { color: "white", fontWeight: "900", fontSize: 13, textAlign: "center" },
   chipTextDisabled: { color: "#334155" },
 
   roundBanner: {
@@ -731,12 +747,6 @@ const styles = StyleSheet.create({
   },
   secondaryText: { fontWeight: "900", color: "#9a3412" },
 
-  primaryBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: "#f97316",
-    alignItems: "center",
-  },
+  primaryBtn: { flex: 1, padding: 12, borderRadius: 14, backgroundColor: "#f97316", alignItems: "center" },
   primaryBtnText: { color: "white", fontWeight: "900" },
 });

@@ -94,7 +94,7 @@ export default function AppNavigator() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
+      <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false,  contentStyle: { paddingTop: 30, backgroundColor: "#fff7ed" }}}>
         {user ? (
           <>
             <Stack.Screen name="Main" component={MainTabs} />

@@ -6,9 +6,7 @@ export default function GamesScreen() {
   const navigation = useNavigation<any>();
 
   const games = [
-    { title: "Match", desc: "Drag words onto the correct definition." },
-    { title: "Speed Round", desc: "Quick multiple choice (placeholder)" },
-    { title: "Spelling", desc: "Type the word you hear/see (placeholder)" },
+    { title: "Match", desc: "Drag words onto the correct definition." }
   ];
 
   const onPlay = (title: string) => {
