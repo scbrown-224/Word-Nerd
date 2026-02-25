@@ -12,7 +12,7 @@ import ReviewScreen from "../screens/ReviewScreen";
 import GamesScreen from "../screens/GamesScreen";
 import LearnedScreen from "../screens/LearnedScreen";
 import SettingsScreen from "../screens/SettingsScreen";
-
+import MatchGameScreen from "../screens/MatchGameScreen"; 
 
 import { View, Pressable, Text, StyleSheet } from "react-native";
 
@@ -22,16 +22,23 @@ import { db } from "../firebase/firebase";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
-
 type RootStackParamList = {
   Login: undefined;
   Main: undefined;
   Settings: undefined;
+  MatchGame: {
+    poolType: "topic";
+    topic: "biology" | "climate" | "mindset";
+    numPairs: number;
+    timeLimitSec: number;
+  };
 };
 
 type TabKey = "home" | "learn" | "review" | "games" | "learned";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const APP_BG = "#fff7ed";
 
 const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
   { key: "home", label: "Home", icon: "⌂" },
@@ -46,9 +53,16 @@ function MainTabs() {
   const [active, setActive] = React.useState<TabKey>("home");
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: APP_BG }}>
       {/* Main content area */}
-      <View style={{ flex: 1, position: "relative" }}>
+      <View
+        style={{
+          flex: 1,
+          position: "relative",
+          backgroundColor: APP_BG,
+          paddingTop: 35, // 👈 adjust this number (12–20 feels good)
+        }}
+      >
         {/* Floating Settings gear (only show on main tabs, not on Settings screen) */}
         <Pressable
           onPress={() => navigation.navigate("Settings")}
@@ -100,11 +114,11 @@ export default function AppNavigator() {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
-  
+
       if (u) {
         const userRef = doc(db, "users", u.uid);
         const snap = await getDoc(userRef);
-  
+
         if (!snap.exists()) {
           await setDoc(userRef, {
             email: u.email,
@@ -113,30 +127,42 @@ export default function AppNavigator() {
         }
       }
     });
-  
+
     return unsub;
   }, []);
-  
 
   if (loading) return null;
 
   return (
     <NavigationContainer>
-      <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
-  {user ? (
-    <>
-      <Stack.Screen name="Main" component={MainTabs} />
-      <Stack.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{ headerShown: true, title: "Settings" }}
-      />
-    </>
-  ) : (
-    <Stack.Screen name="Login" component={LoginScreen} />
-  )}
-</Stack.Navigator>
+      <Stack.Navigator
+        id="root-stack"
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: APP_BG }, // ✅ prevents gray behind notch + between screens
+        }}
+      >
+        {user ? (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
 
+            {/* ✅ Match game screen route */}
+            <Stack.Screen
+              name="MatchGame"
+              component={MatchGameScreen}
+              options={{ headerShown: false }}
+            />
+
+            <Stack.Screen
+              name="Settings"
+              component={SettingsScreen}
+              options={{ headerShown: true, title: "Settings" }}
+            />
+          </>
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
+      </Stack.Navigator>
     </NavigationContainer>
   );
 }
@@ -169,20 +195,22 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
   },
+
+  // (kept from your friend’s file, even if unused)
   topBar: {
     height: 56,
-    backgroundColor: "#fed7aa", // same orange-200-ish
+    backgroundColor: "#fed7aa",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
     borderBottomWidth: 2,
-    borderBottomColor: "#fdba74", // orange-300-ish
+    borderBottomColor: "#fdba74",
   },
   topBarTitle: {
     fontSize: 16,
     fontWeight: "800",
-    color: "#9a3412", // orange-800-ish
+    color: "#9a3412",
   },
   topBarGearButton: {
     position: "absolute",
@@ -196,29 +224,25 @@ const styles = StyleSheet.create({
   topBarGear: {
     fontSize: 18,
   },
-  tabItemActive: {
-    // mimic “active orange” feel
-  },
+
+  tabItemActive: {},
+
   floatingGearButton: {
     position: "absolute",
-    top: 16,       // adjust if you want it higher/lower
+    top: 16,
     right: 16,
     zIndex: 50,
-    elevation: 50, // helps on Android
+    elevation: 50,
     height: 50,
     width: 50,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-  
-    // subtle “on top of tan” look without creating a new bar
     backgroundColor: "rgba(255,255,255,0.75)",
   },
-  floatingGearIcon: {
-    fontSize: 38,
-  },
-  tabIcon: { fontSize: 18, color: "#6b7280" }, // gray-500
-  tabLabel: { fontSize: 11, color: "#6b7280" },
-  tabTextActive: { color: "#ea580c", fontWeight: "800" }, // orange-600
-});
+  floatingGearIcon: { fontSize: 38 },
 
+  tabIcon: { fontSize: 18, color: "#6b7280" },
+  tabLabel: { fontSize: 11, color: "#6b7280" },
+  tabTextActive: { color: "#ea580c", fontWeight: "800" },
+});
