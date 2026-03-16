@@ -15,6 +15,7 @@ import {
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  increment,
 } from "firebase/firestore";
 
 import { auth, db } from "../firebase/firebase";
@@ -96,20 +97,32 @@ export default function LearnScreen() {
       }
 
       // fetch user's previous topic selections
-      if (!user) return;
-      try {
-        const userRef = doc(db, "users", user.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const arr: string[] = userSnap.data()?.selectedTopics || [];
-          setSelectedTopics(new Set(arr));
-          if (arr.length) {
-            setHasStarted(true);
-          }
+if (!user) return;
+try {
+  const userRef = doc(db, "users", user.uid);
+  const userSnap = await getDoc(userRef);
+
+  if (userSnap.exists()) {
+    const arr: string[] = userSnap.data()?.selectedTopics || [];
+    setSelectedTopics(new Set(arr));
+
+    if (arr.length) {
+      const userWordsSnap = await getDocs(
+        collection(db, "users", user.uid, "userWords")
+      );
+
+      if (userWordsSnap.empty) {
+        for (const topic of arr) {
+          await enrollTopicForUser(user.uid, topic);
         }
-      } catch (e) {
-        console.log("Failed to hydrate selectedTopics", e);
       }
+
+      setHasStarted(true);
+    }
+  }
+} catch (e) {
+  console.log("Failed to hydrate selectedTopics", e);
+}
     };
 
     load();
@@ -204,6 +217,15 @@ export default function LearnScreen() {
   const primaryTopic = current.topics?.[0] ?? Array.from(selectedTopics)[0] ?? "general";
   const categoryLabel = primaryTopic.charAt(0).toUpperCase() + primaryTopic.slice(1);
 
+  useEffect(() => {
+    if (!hasStarted) return;
+    if (!current?.wordId || current.wordId === "placeholder") return;
+  
+    markWordSeen(current).catch((e) => {
+      console.log("Failed to mark word as seen:", e);
+    });
+  }, [current.wordId, hasStarted]);
+
   const next = () => {
     setShowDefinition(false);
     setIndex((prev) => (prev + 1) % totalWords);
@@ -292,6 +314,42 @@ export default function LearnScreen() {
       console.log("Failed to update selectedTopics:", e);
       // optional: show a toast/snackbar here
     }
+  };
+
+  const markWordSeen = async (word: Word) => {
+    const user = auth.currentUser;
+    if (!user || !word?.wordId || word.wordId === "placeholder") return;
+  
+    const userWordRef = doc(db, "users", user.uid, "userWords", word.wordId);
+    const snap = await getDoc(userWordRef);
+  
+    if (!snap.exists()) {
+      await setDoc(userWordRef, {
+        wordId: word.wordId,
+        wordRef: doc(db, "words", word.wordId),
+        topics: word.topics ?? [],
+        status: "learning",
+        seenCount: 1,
+        correctCount: 0,
+        incorrectCount: 0,
+        isFavorite: false,
+        isBookmarked: false,
+        firstSeenAt: serverTimestamp(),
+        lastSeenAt: serverTimestamp(),
+        lastReviewedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+  
+    const data = snap.data();
+    await updateDoc(userWordRef, {
+      seenCount: increment(1),
+      lastSeenAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      ...(data.firstSeenAt ? {} : { firstSeenAt: serverTimestamp() }),
+    });
   };
   
 
