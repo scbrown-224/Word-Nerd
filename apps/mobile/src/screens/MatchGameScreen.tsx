@@ -12,7 +12,8 @@ import {
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { collection, getDocs, getDoc, limit, query } from "firebase/firestore";
-import { db } from "../firebase/firebase"; // <-- adjust path if needed
+import { db } from "../firebase/firebase";
+import { saveGameScore } from "../utils/saveGameScore";
 
 type Params = {
   poolType: "topic";
@@ -136,8 +137,16 @@ export default function MatchGameScreen() {
     setRoundCleared(false);
   };
 
-  const endGameFinished = () => {
-    setScore((s) => s + Math.max(0, timeLeft));
+  const endGameFinished = async () => {
+    const finalScore = score + Math.max(0, timeLeft);
+  
+    setScore(finalScore);
+  
+    await saveGameScore({
+      gameType: "wordMatching",
+      score: finalScore,
+    });
+  
     setEnded(true);
   };
 
@@ -154,7 +163,7 @@ export default function MatchGameScreen() {
     queueRef.current = queueRef.current.slice(next.length);
 
     if (next.length === 0) {
-      endGameFinished();
+      void endGameFinished();
       return;
     }
 
