@@ -1,17 +1,33 @@
-import React, { useMemo } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase/firebase";
+import { getTopScoresByGame, TopScoresByGame } from "../utils/getGameScores";
 
 type Props = { onGoLearn?: () => void };
 
 export default function HomeScreen({ onGoLearn }: Props) {
   const user = auth.currentUser;
+
   const username = useMemo(() => {
     if (!user?.email) return "there";
     const handle = user.email.split("@")[0];
     return handle.length > 0 ? handle : "there";
   }, [user?.email]);
+
+  const [topScores, setTopScores] = useState<TopScoresByGame>({});
+  const [loadingScores, setLoadingScores] = useState(true);
+
+  useEffect(() => {
+    const loadScores = async () => {
+      setLoadingScores(true);
+      const scores = await getTopScoresByGame(3);
+      setTopScores(scores);
+      setLoadingScores(false);
+    };
+
+    loadScores();
+  }, []);
 
   // Temporary mock progress data to mirror the prototype dashboard layout.
   const mock = {
@@ -23,11 +39,14 @@ export default function HomeScreen({ onGoLearn }: Props) {
   };
 
   const progressPct = Math.round((mock.learned / mock.totalWords) * 100);
+
   const learnedBadge = [
     { label: "First Word", earned: mock.learned >= 1 },
     { label: "5 Words", earned: mock.learned >= 5 },
     { label: "10 Words", earned: mock.learned >= 10 },
   ];
+
+  const wordMatchScores = topScores["wordMatching"] || [];
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -66,6 +85,34 @@ export default function HomeScreen({ onGoLearn }: Props) {
         <Text style={styles.cardText}>
           {mock.learned} of {mock.totalWords} words mastered
         </Text>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.rowBetween}>
+          <Text style={styles.cardTitle}>Top Game Scores 🏆</Text>
+        </View>
+
+        <View style={styles.gameScoreBubble}>
+          <View style={styles.gameScoreHeader}>
+            <Text style={styles.gameScoreGameTitle}>Word Match</Text>
+            <Text style={styles.gameScoreChip}>Top 3</Text>
+          </View>
+
+          {loadingScores ? (
+            <ActivityIndicator color="#f97316" />
+          ) : wordMatchScores.length === 0 ? (
+            <Text style={styles.cardText}>No scores yet — play a round to set your first high score.</Text>
+          ) : (
+            wordMatchScores.map((entry, index) => (
+              <View key={entry.id} style={styles.scoreRow}>
+                <View style={styles.scoreRankBadge}>
+                  <Text style={styles.scoreRankText}>#{index + 1}</Text>
+                </View>
+                <Text style={styles.scoreValue}>{entry.score}</Text>
+              </View>
+            ))
+          )}
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -180,6 +227,64 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: "#f97316",
   },
+
+  gameScoreBubble: {
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#fdba74",
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+  },
+  gameScoreHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  gameScoreGameTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  gameScoreChip: {
+    backgroundColor: "#f97316",
+    color: "white",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: "hidden",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  scoreRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "white",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#ffedd5",
+  },
+  scoreRankBadge: {
+    backgroundColor: "#fef3c7",
+    borderWidth: 1,
+    borderColor: "#fbbf24",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  scoreRankText: {
+    color: "#92400e",
+    fontWeight: "800",
+  },
+  scoreValue: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#f97316",
+  },
+
   achievements: { flexDirection: "row", gap: 10 },
   achievementCard: {
     flex: 1,
@@ -192,6 +297,7 @@ const styles = StyleSheet.create({
   achievementIcon: { fontSize: 20, color: "#94a3b8", marginBottom: 4 },
   achievementIconActive: { color: "#f97316" },
   achievementLabel: { fontSize: 12, color: "#0f172a", textAlign: "center" },
+
   dailyCard: {
     backgroundColor: "#fff7ed",
     borderWidth: 1,
