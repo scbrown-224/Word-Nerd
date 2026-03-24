@@ -1,9 +1,23 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 import { signOut } from "firebase/auth";
-import { auth } from "../firebase/firebase";
+import {
+  collection,
+  getDocs,
+  Timestamp,
+} from "firebase/firestore";
+import { auth, db } from "../firebase/firebase";
 
 type Props = { onGoLearn?: () => void };
+
+type HomeStats = {
+  wordsSeen: number;
+  wordsMastered: number;
+  inReview: number;
+  dueNow: number;
+  totalWords: number;
+  todaySeen: number;
+};
 
 export default function HomeScreen({ onGoLearn }: Props) {
   const user = auth.currentUser;
@@ -14,20 +28,120 @@ export default function HomeScreen({ onGoLearn }: Props) {
   }, [user?.email]);
 
   // Temporary mock progress data to mirror the prototype dashboard layout.
-  const mock = {
-    learned: 12,
-    learning: 5,
-    totalCorrect: 48,
-    streak: 5,
-    totalWords: 30,
-  };
+  // replaced mock data below
+  const [stats, setStats] = useState<HomeStats>({
+    wordsSeen: 0,
+    wordsMastered: 0,
+    inReview: 0,
+    dueNow: 0,
+    totalWords: 0,
+    todaySeen: 0,
+  });
+  const [loadingStats, setLoadingStats] = useState(true);
 
-  const progressPct = Math.round((mock.learned / mock.totalWords) * 100);
-  const learnedBadge = [
-    { label: "First Word", earned: mock.learned >= 1 },
-    { label: "5 Words", earned: mock.learned >= 5 },
-    { label: "10 Words", earned: mock.learned >= 10 },
-  ];
+  useEffect(() => {
+    const loadStats = async () => {
+      const user = auth.currentUser;
+      if (!user) {
+        setLoadingStats(false);
+        return;
+      }
+  
+      try {
+        const userWordsCol = collection(db, "users", user.uid, "userWords");
+        const snap = await getDocs(userWordsCol);
+  
+        let wordsSeen = 0;
+        let wordsMastered = 0;
+        let inReview = 0;
+        let dueNow = 0;
+        let todaySeen = 0;
+  
+        const now = new Date();
+  
+        const startOfToday = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          0,
+          0,
+          0,
+          0
+        );
+  
+        const endOfToday = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          23,
+          59,
+          59,
+          999
+        );
+  
+        snap.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+  
+          const seenCount = data.seenCount ?? 0;
+          const status = data.status ?? "learning";
+          const nextReviewAt = data.nextReviewAt;
+  
+          if (seenCount > 0) {
+            wordsSeen += 1;
+          }
+  
+          if (status === "learned") {
+            wordsMastered += 1;
+          }
+  
+          if (seenCount > 0 && status === "learning") {
+            inReview += 1;
+          }
+  
+          if (nextReviewAt instanceof Timestamp) {
+            const reviewDate = nextReviewAt.toDate();
+            if (reviewDate <= now) {
+              dueNow += 1;
+            }
+          }
+  
+          const firstSeenAt = data.firstSeenAt;
+          if (firstSeenAt instanceof Timestamp) {
+            const seenDate = firstSeenAt.toDate();
+            if (seenDate >= startOfToday && seenDate <= endOfToday) {
+              todaySeen += 1;
+            }
+          }
+        });
+  
+        setStats({
+          wordsSeen,
+          wordsMastered,
+          inReview,
+          dueNow,
+          totalWords: snap.size,
+          todaySeen,
+        });
+      } catch (e) {
+        console.log("Failed to load home stats:", e);
+      } finally {
+        setLoadingStats(false);
+      }
+    };
+  
+    loadStats();
+  }, []);
+
+  const progressPct =
+  stats.totalWords > 0
+    ? Math.round((stats.wordsMastered / stats.totalWords) * 100)
+    : 0;
+
+    const learnedBadge = [
+      { label: "First Mastered", earned: stats.wordsMastered >= 1 },
+      { label: "5 Mastered", earned: stats.wordsMastered >= 5 },
+      { label: "10 Mastered", earned: stats.wordsMastered >= 10 },
+    ];
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -37,23 +151,34 @@ export default function HomeScreen({ onGoLearn }: Props) {
       </View>
 
       <View style={styles.statsGrid}>
-        <View style={[styles.statCard, styles.greenCard]}>
-          <Text style={styles.statNumber}>{mock.learned}</Text>
-          <Text style={styles.statLabel}>Words Learned</Text>
-        </View>
-        <View style={[styles.statCard, styles.orangeCard]}>
-          <Text style={styles.statNumber}>{mock.streak}</Text>
-          <Text style={styles.statLabel}>Day Streak 🔥</Text>
-        </View>
-        <View style={[styles.statCard, styles.blueCard]}>
-          <Text style={styles.statNumber}>{mock.learning}</Text>
-          <Text style={styles.statLabel}>In Progress</Text>
-        </View>
-        <View style={[styles.statCard, styles.purpleCard]}>
-          <Text style={styles.statNumber}>{mock.totalCorrect}</Text>
-          <Text style={styles.statLabel}>Total Correct</Text>
-        </View>
-      </View>
+  <View style={[styles.statCard, styles.greenCard]}>
+    <Text style={styles.statNumber}>
+      {loadingStats ? "…" : stats.wordsSeen}
+    </Text>
+    <Text style={styles.statLabel}>Words Seen 👀</Text>
+  </View>
+
+  <View style={[styles.statCard, styles.orangeCard]}>
+    <Text style={styles.statNumber}>
+      {loadingStats ? "…" : stats.wordsMastered}
+    </Text>
+    <Text style={styles.statLabel}>Words Mastered ✅</Text>
+  </View>
+
+  <View style={[styles.statCard, styles.blueCard]}>
+    <Text style={styles.statNumber}>
+      {loadingStats ? "…" : stats.inReview}
+    </Text>
+    <Text style={styles.statLabel}>In Review 🔁</Text>
+  </View>
+
+  <View style={[styles.statCard, styles.purpleCard]}>
+    <Text style={styles.statNumber}>
+      {loadingStats ? "…" : stats.dueNow}
+    </Text>
+    <Text style={styles.statLabel}>Due Now ⏰</Text>
+  </View>
+</View>
 
       <View style={styles.card}>
         <View style={styles.rowBetween}>
@@ -64,8 +189,8 @@ export default function HomeScreen({ onGoLearn }: Props) {
           <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
         </View>
         <Text style={styles.cardText}>
-          {mock.learned} of {mock.totalWords} words mastered
-        </Text>
+  {loadingStats ? "Loading progress…" : `${stats.learned} of ${stats.totalWords} words mastered`}
+</Text>
       </View>
 
       <View style={styles.card}>
@@ -92,15 +217,19 @@ export default function HomeScreen({ onGoLearn }: Props) {
 
       <View style={styles.dailyCard}>
         <Text style={styles.cardTitle}>Today's Goal 🎯</Text>
-        <Text style={styles.cardText}>Learn 3 new words today</Text>
-        <View style={styles.dailyProgress}>
-          <View
-            style={[
-              styles.dailyFill,
-              { width: `${Math.min((mock.learned / 3) * 100, 100)}%` },
-            ]}
-          />
-        </View>
+        <Text style={styles.cardText}>
+  {loadingStats
+    ? "Loading today’s progress…"
+    : `${stats.todayLearned} / 3 new words seen today`}
+</Text>
+<View style={styles.dailyProgress}>
+  <View
+    style={[
+      styles.dailyFill,
+      { width: `${Math.min((stats.todayLearned / 3) * 100, 100)}%` },
+    ]}
+  />
+</View>
       </View>
 
       <View style={styles.actions}>
