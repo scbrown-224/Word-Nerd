@@ -54,8 +54,14 @@ const FALLBACK_WORD: Word = {
 
 
 
-type ProgressMap = Record<string, { correct: number; status: "learning" | "learned" }>;
+type UserWordProgress = {
+  correctCount: number;
+  incorrectCount: number;
+  seenCount: number;
+  status: "learning" | "learned";
+};
 
+type ProgressMap = Record<string, UserWordProgress>;
 export default function LearnScreen() {
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -63,7 +69,7 @@ export default function LearnScreen() {
   const [index, setIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [progress, setProgress] = useState<ProgressMap>({});
+  const [progressMap, setProgressMap] = useState<ProgressMap>({});
   const [hasStarted, setHasStarted] = useState(false);
   const [fsWords, setFsWords] = useState<Word[]>([]);
   const [loadingWords, setLoadingWords] = useState(false);
@@ -152,14 +158,36 @@ try {
   
         // Firestore allows array-contains-any up to 10 values
         const qUserWords = query(userWordsCol, where("topics", "array-contains-any", topicsArray.slice(0, 10)));
-        const userWordsSnap = await getDocs(qUserWords);
+        // const userWordsSnap = await getDocs(qUserWords);
   
-        const wordIds = userWordsSnap.docs.map((d) => d.id);
-        if (wordIds.length === 0) {
-          setFsWords([]);
-          setLoadingWords(false);
-          return;
-        }
+        // const wordIds = userWordsSnap.docs.map((d) => d.id);
+        // if (wordIds.length === 0) {
+        //   setFsWords([]);
+        //   setLoadingWords(false);
+        //   return;
+        // }
+
+        const userWordsSnap = await getDocs(qUserWords);
+
+const nextProgressMap: ProgressMap = {};
+
+userWordsSnap.forEach((docSnap) => {
+  const data = docSnap.data() as any;
+  nextProgressMap[docSnap.id] = {
+    correctCount: data.correctCount ?? 0,
+    incorrectCount: data.incorrectCount ?? 0,
+    seenCount: data.seenCount ?? 0,
+    status: data.status ?? "learning",
+  };
+});
+
+const wordIds = userWordsSnap.docs.map((d) => d.id);
+if (wordIds.length === 0) {
+  setFsWords([]);
+  setProgressMap({});
+  setLoadingWords(false);
+  return;
+}
   
         // 2) fetch global word docs in chunks (documentId() "in" limit is 10)
         const chunks: string[][] = [];
@@ -190,6 +218,7 @@ try {
         fetched.sort((a, b) => a.word.localeCompare(b.word));
   
         setFsWords(fetched);
+        setProgressMap(nextProgressMap);
       } catch (e) {
         console.log("Failed to fetch Firestore words:", e);
         setFsWords([]);
@@ -212,7 +241,7 @@ try {
     () => (filteredWords.length ? filteredWords[index % totalWords] : FALLBACK_WORD),
     [filteredWords, index, totalWords]
   );
-  const correctCount = progress[current.wordId]?.correct ?? 0;
+  const correctCount = progressMap[current.wordId]?.correctCount ?? 0;
   const progressPct = Math.min((correctCount / 3) * 100, 100);
   const primaryTopic = current.topics?.[0] ?? Array.from(selectedTopics)[0] ?? "general";
   const categoryLabel = primaryTopic.charAt(0).toUpperCase() + primaryTopic.slice(1);
@@ -231,26 +260,81 @@ try {
     setIndex((prev) => (prev + 1) % totalWords);
   };
 
-  const handleKnow = () => {
-    setProgress((prev) => {
-      const currentCorrect = prev[current.wordId]?.correct ?? 0;
-      const nextCorrect = currentCorrect + 1;
-      const status = nextCorrect >= 3 ? "learned" : "learning";
-      return { ...prev, [current.wordId]: { correct: nextCorrect, status } };
-    });
-
-    if (correctCount + 1 >= 3) {
-      setShowSuccess(true);
-      setTimeout(() => {
-        setShowSuccess(false);
+  const handleKnow = async () => {
+    const user = auth.currentUser;
+    if (!user || !current?.wordId || current.wordId === "placeholder") return;
+  
+    const userWordRef = doc(db, "users", user.uid, "userWords", current.wordId);
+    const currentCorrect = progressMap[current.wordId]?.correctCount ?? 0;
+    const currentIncorrect = progressMap[current.wordId]?.incorrectCount ?? 0;
+    const currentSeen = progressMap[current.wordId]?.seenCount ?? 0;
+  
+    const nextCorrect = currentCorrect + 1;
+    const nextStatus = nextCorrect >= 3 ? "learned" : "learning";
+  
+    try {
+      await updateDoc(userWordRef, {
+        correctCount: increment(1),
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+  
+      setProgressMap((prev) => ({
+        ...prev,
+        [current.wordId]: {
+          correctCount: nextCorrect,
+          incorrectCount: currentIncorrect,
+          seenCount: currentSeen,
+          status: nextStatus,
+        },
+      }));
+  
+      if (nextCorrect >= 3) {
+        setShowSuccess(true);
+        setTimeout(() => {
+          setShowSuccess(false);
+          next();
+        }, 1200);
+      } else {
         next();
-      }, 1200);
-    } else {
-      next();
+      }
+    } catch (e) {
+      console.log("Failed to update word progress:", e);
     }
   };
 
-  const handleDontKnow = () => {
+  const handleDontKnow = async () => {
+    const user = auth.currentUser;
+    if (!user || !current?.wordId || current.wordId === "placeholder") {
+      setShowDefinition(true);
+      return;
+    }
+  
+    const userWordRef = doc(db, "users", user.uid, "userWords", current.wordId);
+    const currentCorrect = progressMap[current.wordId]?.correctCount ?? 0;
+    const currentIncorrect = progressMap[current.wordId]?.incorrectCount ?? 0;
+    const currentSeen = progressMap[current.wordId]?.seenCount ?? 0;
+  
+    try {
+      await updateDoc(userWordRef, {
+        incorrectCount: increment(1),
+        status: "learning",
+        updatedAt: serverTimestamp(),
+      });
+  
+      setProgressMap((prev) => ({
+        ...prev,
+        [current.wordId]: {
+          correctCount: currentCorrect,
+          incorrectCount: currentIncorrect + 1,
+          seenCount: currentSeen,
+          status: "learning",
+        },
+      }));
+    } catch (e) {
+      console.log("Failed to update incorrect count:", e);
+    }
+  
     setShowDefinition(true);
   };
 
@@ -284,7 +368,7 @@ try {
   const toggleTopic = async (id: string) => {
     // reset local learn state like you already do
     setIndex(0);
-    setProgress({});
+    setProgressMap({});
     setShowDefinition(false);
     setShowSuccess(false);
   
@@ -316,6 +400,42 @@ try {
     }
   };
 
+  // const markWordSeen = async (word: Word) => {
+  //   const user = auth.currentUser;
+  //   if (!user || !word?.wordId || word.wordId === "placeholder") return;
+  
+  //   const userWordRef = doc(db, "users", user.uid, "userWords", word.wordId);
+  //   const snap = await getDoc(userWordRef);
+  
+  //   if (!snap.exists()) {
+  //     await setDoc(userWordRef, {
+  //       wordId: word.wordId,
+  //       wordRef: doc(db, "words", word.wordId),
+  //       topics: word.topics ?? [],
+  //       status: "learning",
+  //       seenCount: 1,
+  //       correctCount: 0,
+  //       incorrectCount: 0,
+  //       isFavorite: false,
+  //       isBookmarked: false,
+  //       firstSeenAt: serverTimestamp(),
+  //       lastSeenAt: serverTimestamp(),
+  //       lastReviewedAt: null,
+  //       createdAt: serverTimestamp(),
+  //       updatedAt: serverTimestamp(),
+  //     });
+  //     return;
+  //   }
+  
+  //   const data = snap.data();
+  //   await updateDoc(userWordRef, {
+  //     seenCount: increment(1),
+  //     lastSeenAt: serverTimestamp(),
+  //     updatedAt: serverTimestamp(),
+  //     ...(data.firstSeenAt ? {} : { firstSeenAt: serverTimestamp() }),
+  //   });
+  // };
+  
   const markWordSeen = async (word: Word) => {
     const user = auth.currentUser;
     if (!user || !word?.wordId || word.wordId === "placeholder") return;
@@ -334,24 +454,27 @@ try {
         incorrectCount: 0,
         isFavorite: false,
         isBookmarked: false,
+        intervalDays: 1,
         firstSeenAt: serverTimestamp(),
         lastSeenAt: serverTimestamp(),
         lastReviewedAt: null,
+        nextReviewAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
       return;
     }
   
-    const data = snap.data();
+    const data = snap.data() as any;
     await updateDoc(userWordRef, {
       seenCount: increment(1),
       lastSeenAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       ...(data.firstSeenAt ? {} : { firstSeenAt: serverTimestamp() }),
+      ...(data.nextReviewAt ? {} : { nextReviewAt: serverTimestamp() }),
+      ...(data.intervalDays ? {} : { intervalDays: 1 }),
     });
   };
-  
 
   const hasSelection = selectedTopics.size > 0;
 
