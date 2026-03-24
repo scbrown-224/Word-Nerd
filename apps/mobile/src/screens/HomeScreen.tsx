@@ -1,11 +1,14 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
-import { signOut } from "firebase/auth";
 import {
-  collection,
-  getDocs,
-  Timestamp,
-} from "firebase/firestore";
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+} from "react-native";
+import { signOut } from "firebase/auth";
+import { collection, getDocs, Timestamp, orderBy, query } from "firebase/firestore";
 import { auth, db } from "../firebase/firebase";
 
 type Props = { onGoLearn?: () => void };
@@ -19,16 +22,22 @@ type HomeStats = {
   todaySeen: number;
 };
 
+type GameScoreEntry = {
+  id: string;
+  gameType: string;
+  score: number;
+  createdAt?: any;
+};
+
 export default function HomeScreen({ onGoLearn }: Props) {
   const user = auth.currentUser;
+
   const username = useMemo(() => {
     if (!user?.email) return "there";
     const handle = user.email.split("@")[0];
     return handle.length > 0 ? handle : "there";
   }, [user?.email]);
 
-  // Temporary mock progress data to mirror the prototype dashboard layout.
-  // replaced mock data below
   const [stats, setStats] = useState<HomeStats>({
     wordsSeen: 0,
     wordsMastered: 0,
@@ -39,6 +48,9 @@ export default function HomeScreen({ onGoLearn }: Props) {
   });
   const [loadingStats, setLoadingStats] = useState(true);
 
+  const [topScores, setTopScores] = useState<GameScoreEntry[]>([]);
+  const [loadingScores, setLoadingScores] = useState(true);
+
   useEffect(() => {
     const loadStats = async () => {
       const user = auth.currentUser;
@@ -46,19 +58,19 @@ export default function HomeScreen({ onGoLearn }: Props) {
         setLoadingStats(false);
         return;
       }
-  
+
       try {
         const userWordsCol = collection(db, "users", user.uid, "userWords");
         const snap = await getDocs(userWordsCol);
-  
+
         let wordsSeen = 0;
         let wordsMastered = 0;
         let inReview = 0;
         let dueNow = 0;
         let todaySeen = 0;
-  
+
         const now = new Date();
-  
+
         const startOfToday = new Date(
           now.getFullYear(),
           now.getMonth(),
@@ -68,7 +80,7 @@ export default function HomeScreen({ onGoLearn }: Props) {
           0,
           0
         );
-  
+
         const endOfToday = new Date(
           now.getFullYear(),
           now.getMonth(),
@@ -78,33 +90,33 @@ export default function HomeScreen({ onGoLearn }: Props) {
           59,
           999
         );
-  
+
         snap.forEach((docSnap) => {
           const data = docSnap.data() as any;
-  
+
           const seenCount = data.seenCount ?? 0;
           const status = data.status ?? "learning";
           const nextReviewAt = data.nextReviewAt;
-  
+
           if (seenCount > 0) {
             wordsSeen += 1;
           }
-  
+
           if (status === "learned") {
             wordsMastered += 1;
           }
-  
+
           if (seenCount > 0 && status === "learning") {
             inReview += 1;
           }
-  
+
           if (nextReviewAt instanceof Timestamp) {
             const reviewDate = nextReviewAt.toDate();
             if (reviewDate <= now) {
               dueNow += 1;
             }
           }
-  
+
           const firstSeenAt = data.firstSeenAt;
           if (firstSeenAt instanceof Timestamp) {
             const seenDate = firstSeenAt.toDate();
@@ -113,7 +125,7 @@ export default function HomeScreen({ onGoLearn }: Props) {
             }
           }
         });
-  
+
         setStats({
           wordsSeen,
           wordsMastered,
@@ -128,20 +140,56 @@ export default function HomeScreen({ onGoLearn }: Props) {
         setLoadingStats(false);
       }
     };
-  
+
+    const loadTopScores = async () => {
+      const user = auth.currentUser;
+      if (!user) {
+        setLoadingScores(false);
+        return;
+      }
+
+      try {
+        const scoresRef = collection(db, "users", user.uid, "gameScores");
+        const q = query(scoresRef, orderBy("score", "desc"));
+        const snap = await getDocs(q);
+
+        const wordMatchScores: GameScoreEntry[] = [];
+
+        snap.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+
+          if (data.gameType === "wordMatching" && wordMatchScores.length < 3) {
+            wordMatchScores.push({
+              id: docSnap.id,
+              gameType: data.gameType,
+              score: data.score ?? 0,
+              createdAt: data.createdAt,
+            });
+          }
+        });
+
+        setTopScores(wordMatchScores);
+      } catch (e) {
+        console.log("Failed to load game scores:", e);
+      } finally {
+        setLoadingScores(false);
+      }
+    };
+
     loadStats();
+    loadTopScores();
   }, []);
 
   const progressPct =
-  stats.totalWords > 0
-    ? Math.round((stats.wordsMastered / stats.totalWords) * 100)
-    : 0;
+    stats.totalWords > 0
+      ? Math.round((stats.wordsMastered / stats.totalWords) * 100)
+      : 0;
 
-    const learnedBadge = [
-      { label: "First Mastered", earned: stats.wordsMastered >= 1 },
-      { label: "5 Mastered", earned: stats.wordsMastered >= 5 },
-      { label: "10 Mastered", earned: stats.wordsMastered >= 10 },
-    ];
+  const learnedBadge = [
+    { label: "First Mastered", earned: stats.wordsMastered >= 1 },
+    { label: "5 Mastered", earned: stats.wordsMastered >= 5 },
+    { label: "10 Mastered", earned: stats.wordsMastered >= 10 },
+  ];
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -151,34 +199,26 @@ export default function HomeScreen({ onGoLearn }: Props) {
       </View>
 
       <View style={styles.statsGrid}>
-  <View style={[styles.statCard, styles.greenCard]}>
-    <Text style={styles.statNumber}>
-      {loadingStats ? "…" : stats.wordsSeen}
-    </Text>
-    <Text style={styles.statLabel}>Words Seen 👀</Text>
-  </View>
+        <View style={[styles.statCard, styles.greenCard]}>
+          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsSeen}</Text>
+          <Text style={styles.statLabel}>Words Seen 👀</Text>
+        </View>
 
-  <View style={[styles.statCard, styles.orangeCard]}>
-    <Text style={styles.statNumber}>
-      {loadingStats ? "…" : stats.wordsMastered}
-    </Text>
-    <Text style={styles.statLabel}>Words Mastered ✅</Text>
-  </View>
+        <View style={[styles.statCard, styles.orangeCard]}>
+          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsMastered}</Text>
+          <Text style={styles.statLabel}>Words Mastered ✅</Text>
+        </View>
 
-  <View style={[styles.statCard, styles.blueCard]}>
-    <Text style={styles.statNumber}>
-      {loadingStats ? "…" : stats.inReview}
-    </Text>
-    <Text style={styles.statLabel}>In Review 🔁</Text>
-  </View>
+        <View style={[styles.statCard, styles.blueCard]}>
+          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.inReview}</Text>
+          <Text style={styles.statLabel}>In Review 🔁</Text>
+        </View>
 
-  <View style={[styles.statCard, styles.purpleCard]}>
-    <Text style={styles.statNumber}>
-      {loadingStats ? "…" : stats.dueNow}
-    </Text>
-    <Text style={styles.statLabel}>Due Now ⏰</Text>
-  </View>
-</View>
+        <View style={[styles.statCard, styles.purpleCard]}>
+          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.dueNow}</Text>
+          <Text style={styles.statLabel}>Due Now ⏰</Text>
+        </View>
+      </View>
 
       <View style={styles.card}>
         <View style={styles.rowBetween}>
@@ -189,8 +229,40 @@ export default function HomeScreen({ onGoLearn }: Props) {
           <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
         </View>
         <Text style={styles.cardText}>
-  {loadingStats ? "Loading progress…" : `${stats.learned} of ${stats.totalWords} words mastered`}
-</Text>
+          {loadingStats
+            ? "Loading progress…"
+            : `${stats.wordsMastered} of ${stats.totalWords} words mastered`}
+        </Text>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.rowBetween}>
+          <Text style={styles.cardTitle}>Top Game Scores 🏆</Text>
+        </View>
+
+        <View style={styles.gameScoreBubble}>
+          <View style={styles.gameScoreHeader}>
+            <Text style={styles.gameScoreGameTitle}>Word Match</Text>
+            <Text style={styles.gameScoreChip}>Top 3</Text>
+          </View>
+
+          {loadingScores ? (
+            <ActivityIndicator color="#f97316" />
+          ) : topScores.length === 0 ? (
+            <Text style={styles.cardText}>
+              No scores yet — play a round to set your first high score.
+            </Text>
+          ) : (
+            topScores.map((entry, index) => (
+              <View key={entry.id} style={styles.scoreRow}>
+                <View style={styles.scoreRankBadge}>
+                  <Text style={styles.scoreRankText}>#{index + 1}</Text>
+                </View>
+                <Text style={styles.scoreValue}>{entry.score}</Text>
+              </View>
+            ))
+          )}
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -218,18 +290,18 @@ export default function HomeScreen({ onGoLearn }: Props) {
       <View style={styles.dailyCard}>
         <Text style={styles.cardTitle}>Today's Goal 🎯</Text>
         <Text style={styles.cardText}>
-  {loadingStats
-    ? "Loading today’s progress…"
-    : `${stats.todayLearned} / 3 new words seen today`}
-</Text>
-<View style={styles.dailyProgress}>
-  <View
-    style={[
-      styles.dailyFill,
-      { width: `${Math.min((stats.todayLearned / 3) * 100, 100)}%` },
-    ]}
-  />
-</View>
+          {loadingStats
+            ? "Loading today’s progress…"
+            : `${stats.todaySeen} / 3 new words seen today`}
+        </Text>
+        <View style={styles.dailyProgress}>
+          <View
+            style={[
+              styles.dailyFill,
+              { width: `${Math.min((stats.todaySeen / 3) * 100, 100)}%` },
+            ]}
+          />
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -294,7 +366,11 @@ const styles = StyleSheet.create({
     elevation: 3,
     gap: 10,
   },
-  rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   cardTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
   cardText: { color: "#475569" },
   progressValue: { fontSize: 20, fontWeight: "700", color: "#f97316" },
@@ -308,6 +384,62 @@ const styles = StyleSheet.create({
   progressFill: {
     height: "100%",
     backgroundColor: "#f97316",
+  },
+  gameScoreBubble: {
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#fdba74",
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+  },
+  gameScoreHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  gameScoreGameTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  gameScoreChip: {
+    backgroundColor: "#f97316",
+    color: "white",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: "hidden",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  scoreRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "white",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#ffedd5",
+  },
+  scoreRankBadge: {
+    backgroundColor: "#fef3c7",
+    borderWidth: 1,
+    borderColor: "#fbbf24",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  scoreRankText: {
+    color: "#92400e",
+    fontWeight: "800",
+  },
+  scoreValue: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#f97316",
   },
   achievements: { flexDirection: "row", gap: 10 },
   achievementCard: {
