@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { View, Text, Pressable, StyleSheet, ScrollView, TextInput } from "react-native";
+import { Audio } from "expo-av";
 
 // import { collection, doc, getDoc, getDocs, query, where, documentId } from "firebase/firestore";
 import {
@@ -73,6 +74,10 @@ export default function LearnScreen() {
   const [hasStarted, setHasStarted] = useState(false);
   const [fsWords, setFsWords] = useState<Word[]>([]);
   const [loadingWords, setLoadingWords] = useState(false);
+  const [showTopicSearch, setShowTopicSearch] = useState(false);
+  const [topicSearchQuery, setTopicSearchQuery] = useState("");
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   // Load available topics from Firestore and hydrate the user's saved selection
   useEffect(() => {
@@ -235,6 +240,25 @@ if (wordIds.length === 0) {
     return fsWords.length ? fsWords : [FALLBACK_WORD as any];
   }, [fsWords]);
   
+  const filteredTopics = useMemo(() => {
+    const q = topicSearchQuery.trim().toLowerCase();
+    if (!q) return topics;
+    return topics.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.id.toLowerCase().includes(q) ||
+        (t.seeds || []).some((s) => s.toLowerCase().includes(q))
+    );
+  }, [topicSearchQuery, topics]);
+
+  useEffect(() => {
+    // cleanup audio player on unmount
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {});
+      }
+    };
+  }, []);
 
   const totalWords = filteredWords.length || 1;
   const current = useMemo<Word>(
@@ -386,6 +410,11 @@ if (wordIds.length === 0) {
         selectedTopics: willSelect ? arrayUnion(id) : arrayRemove(id),
         updatedAt: serverTimestamp(),
       });
+
+      // If adding a topic while already started, enroll words immediately
+      if (willSelect && hasStarted) {
+        await enrollTopicForUser(user.uid, id);
+      }
   
       // now update local state so UI matches DB
       setSelectedTopics((prev) => {
@@ -476,6 +505,32 @@ if (wordIds.length === 0) {
     });
   };
 
+  const playCurrentAudio = async () => {
+    if (!current?.audioUrl) return;
+    try {
+      setIsPlayingAudio(true);
+      // unload previous sound
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+      }
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: current.audioUrl },
+        { shouldPlay: true }
+      );
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        if (status.didJustFinish) {
+          setIsPlayingAudio(false);
+        }
+      });
+      await sound.playAsync();
+    } catch (e) {
+      console.log("Failed to play audio", e);
+      setIsPlayingAudio(false);
+    }
+  };
+
   const hasSelection = selectedTopics.size > 0;
 
   if (!hasStarted) {
@@ -539,17 +594,52 @@ if (wordIds.length === 0) {
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.progressHeader}>
         <Text style={styles.header}>Learn</Text>
-        <Text style={styles.subtitle}>
-          {index + 1}/{totalWords}
-        </Text>
-        <View style={styles.topProgress}>
-          <View style={[styles.topProgressFill, { width: `${((index + 1) / totalWords) * 100}%` }]} />
-        </View>
+      <Text style={styles.subtitle}>
+        {index + 1}/{totalWords}
+      </Text>
+      <View style={styles.topProgress}>
+        <View style={[styles.topProgressFill, { width: `${((index + 1) / totalWords) * 100}%` }]} />
       </View>
+    </View>
 
-      <Pressable style={styles.changeTopics} onPress={() => setHasStarted(false)}>
-        <Text style={styles.changeTopicsText}>Change topics</Text>
+      <Pressable
+        style={[styles.changeTopicsButton, showTopicSearch && styles.changeTopicsButtonActive]}
+        onPress={() => setShowTopicSearch((prev) => !prev)}
+      >
+        <Text style={styles.changeTopicsButtonText}>
+          {showTopicSearch ? "Close topic search" : "Choose topics"}
+        </Text>
       </Pressable>
+
+      {showTopicSearch && (
+        <View style={styles.topicSearchCard}>
+          <TextInput
+            placeholder="Search topics..."
+            value={topicSearchQuery}
+            onChangeText={setTopicSearchQuery}
+            style={styles.topicSearchInput}
+            placeholderTextColor="#94a3b8"
+            autoFocus
+          />
+          <View style={styles.topicSearchList}>
+            {filteredTopics.length === 0 && <Text style={styles.loading}>No topics match your search.</Text>}
+            {filteredTopics.map((topic) => {
+              const active = selectedTopics.has(topic.id);
+              return (
+                <Pressable
+                  key={topic.id}
+                  style={[styles.topicPill, active && styles.topicPillActive]}
+                  onPress={() => toggleTopic(topic.id)}
+                >
+                  <Text style={[styles.topicPillText, active && styles.topicPillTextActive]}>
+                    {topic.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
 
       <View style={styles.cardShell}>
         {showSuccess ? (
@@ -565,8 +655,10 @@ if (wordIds.length === 0) {
               <Text style={[styles.badge, styles.categoryBadge]}>{categoryLabel}</Text>
             </View>
 
-            <View style={styles.wordBlock}>
-              <Text style={styles.word}>{current.word}</Text>
+            <Pressable style={styles.wordBlock} onPress={playCurrentAudio} disabled={!current.audioUrl}>
+              <Text style={styles.word}>
+                {current.word} {current.audioUrl ? (isPlayingAudio ? "🔊" : "▶︎") : ""}
+              </Text>
               {correctCount > 0 && (
                 <View style={styles.wordProgress}>
                   <View style={[styles.wordProgressFill, { width: `${progressPct}%` }]} />
@@ -575,7 +667,7 @@ if (wordIds.length === 0) {
               {correctCount > 0 && (
                 <Text style={styles.wordProgressLabel}>{correctCount} / 3 correct</Text>
               )}
-            </View>
+            </Pressable>
 
             {showDefinition && (
               <View style={styles.definitionArea}>
@@ -721,6 +813,22 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textDecorationLine: "underline",
   },
+  changeTopicsButton: {
+    alignSelf: "flex-end",
+    backgroundColor: "white",
+    borderColor: "#f97316",
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  changeTopicsButtonActive: {
+    backgroundColor: "#fff7ed",
+  },
+  changeTopicsButtonText: {
+    color: "#c2410c",
+    fontWeight: "800",
+  },
   topicGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -743,4 +851,40 @@ const styles = StyleSheet.create({
   topicNameActive: { color: "#c2410c" },
   topicSeeds: { color: "#475569", fontSize: 12 },
   disabledButton: { backgroundColor: "#cbd5e1" },
+  topicSearchCard: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    gap: 10,
+  },
+  topicSearchInput: {
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#0f172a",
+  },
+  topicSearchList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  topicPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#f8fafc",
+  },
+  topicPillActive: {
+    borderColor: "#f97316",
+    backgroundColor: "#fff7ed",
+  },
+  topicPillText: { color: "#0f172a", fontWeight: "700", fontSize: 13 },
+  topicPillTextActive: { color: "#c2410c" },
 });
