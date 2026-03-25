@@ -1,6 +1,7 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getAuth, initializeAuth } from "firebase/auth";
-import { getReactNativePersistence } from "firebase/auth/react-native";
+// getReactNativePersistence is exposed at runtime for RN; TS typings omit it in some versions.
+// @ts-expect-error
+import { getAuth, initializeAuth, getReactNativePersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
