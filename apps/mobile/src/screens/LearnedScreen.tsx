@@ -50,13 +50,10 @@ const buildPassage = (words: Word[], variant = 0): Passage | null => {
   const topic = chosenWords[0]?.topics?.[0] ?? "everyday learning";
   const opening = `Today's reader follows a short ${topic} scene. Read closely and tap any underlined word if you want a quick reminder before moving on.`;
   const detailSentences = chosenWords.map((word, index) => {
-    const definition = word.definition
-      ? `${word.word} means ${word.definition.charAt(0).toLowerCase()}${word.definition.slice(1)}`
-      : `${word.word} is one of the key ideas in this passage`;
-    const example = word.example?.trim()
-      ? ` In context: ${word.example.endsWith(".") ? word.example : `${word.example}.`}`
-      : "";
-    const cleaned = `${definition}.${example}`;
+    const cleanedSource = word.example?.trim()
+      ? word.example
+      : `${word.word} appears naturally in this short reading passage.`;
+    const cleaned = cleanedSource.endsWith(".") ? cleanedSource : `${cleanedSource}.`;
 
     if (index === 0) {
       return `At the start, ${cleaned.charAt(0).toLowerCase()}${cleaned.slice(1)}`;
@@ -66,13 +63,12 @@ const buildPassage = (words: Word[], variant = 0): Passage | null => {
       return `By the end, ${cleaned.charAt(0).toLowerCase()}${cleaned.slice(1)}`;
     }
 
-    return `Along the way, ${cleaned.charAt(0).toLowerCase()}${cleaned.slice(1)}`;
+    return `Later, ${cleaned.charAt(0).toLowerCase()}${cleaned.slice(1)}`;
   });
-  const closing = `If the paragraph still makes sense after you explain each target word in your own words, the vocabulary is starting to stick.`;
 
   return {
     title: `${topic.charAt(0).toUpperCase()}${topic.slice(1)} Reader`,
-    body: [opening, ...detailSentences, closing].join(" "),
+    body: [opening, ...detailSentences].join(" "),
     targetWordIds: chosenWords.map((word) => word.wordId),
   };
 };
