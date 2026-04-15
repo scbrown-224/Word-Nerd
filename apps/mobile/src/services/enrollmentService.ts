@@ -1,6 +1,7 @@
 
   
 import {
+  arrayUnion,
   collection,
   doc,
   getDocs,
@@ -69,6 +70,72 @@ export const enrollTopicForUser = async (
         lastReviewedAt: null,
         nextReviewAt: null,
         createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+  }
+};
+
+export const enrollWordIdsForUser = async (
+  uid: string,
+  wordIds: string[],
+  sourceTag: string
+) => {
+  if (wordIds.length === 0) return;
+
+  const userWordsCol = collection(db, "users", uid, "userWords");
+  const existing = new Set<string>();
+
+  for (const idsChunk of chunk(wordIds, 10)) {
+    const existingSnap = await getDocs(
+      query(userWordsCol, where(documentId(), "in", idsChunk))
+    );
+    existingSnap.forEach((docSnap) => existing.add(docSnap.id));
+  }
+
+  const missing = wordIds.filter((id) => !existing.has(id));
+
+  for (const idsChunk of chunk(missing, 400)) {
+    const batch = writeBatch(db);
+
+    for (const wordId of idsChunk) {
+      const userWordRef = doc(db, "users", uid, "userWords", wordId);
+      const globalWordRef = doc(db, "words", wordId);
+
+      batch.set(userWordRef, {
+        wordId,
+        wordRef: globalWordRef,
+        topics: [sourceTag],
+        status: "learning",
+        seenCount: 0,
+        correctCount: 0,
+        incorrectCount: 0,
+        isFavorite: false,
+        isBookmarked: false,
+        intervalDays: 0,
+        easeFactor: 2.5,
+        firstSeenAt: null,
+        lastSeenAt: null,
+        lastReviewedAt: null,
+        nextReviewAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+  }
+
+  const existingIds = wordIds.filter((id) => existing.has(id));
+  for (const idsChunk of chunk(existingIds, 400)) {
+    const batch = writeBatch(db);
+
+    for (const wordId of idsChunk) {
+      const userWordRef = doc(db, "users", uid, "userWords", wordId);
+      batch.update(userWordRef, {
+        topics: arrayUnion(sourceTag),
         updatedAt: serverTimestamp(),
       });
     }

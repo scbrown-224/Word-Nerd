@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { Audio } from "expo-av";
 import {
   collection,
   doc,
@@ -18,6 +19,7 @@ type ReviewWord = {
   word: string;
   definition: string;
   example: string | null;
+  audioUrl?: string | null;
   intervalDays: number;
 };
 
@@ -48,6 +50,8 @@ export default function ReviewScreen() {
   const [index, setIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   useEffect(() => {
     const fetchDueWords = async () => {
@@ -102,6 +106,7 @@ export default function ReviewScreen() {
               word: data.word ?? wordDoc.id,
               definition: data.definition ?? "",
               example: data.example ?? null,
+              audioUrl: data.audioUrl ?? null,
               intervalDays: progress?.intervalDays ?? 1,
             });
           });
@@ -118,6 +123,14 @@ export default function ReviewScreen() {
     };
 
     fetchDueWords();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {});
+      }
+    };
   }, []);
 
   const current = useMemo(() => {
@@ -159,6 +172,36 @@ export default function ReviewScreen() {
     }
   };
 
+  const playCurrentAudio = async () => {
+    if (!current?.audioUrl) return;
+
+    try {
+      setIsPlayingAudio(true);
+
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+      }
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: current.audioUrl },
+        { shouldPlay: true }
+      );
+
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        if (status.didJustFinish) {
+          setIsPlayingAudio(false);
+        }
+      });
+
+      await sound.playAsync();
+    } catch (e) {
+      console.log("Failed to play review audio:", e);
+      setIsPlayingAudio(false);
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <Text style={styles.title}>Review</Text>
@@ -181,9 +224,15 @@ export default function ReviewScreen() {
               <Text style={styles.badge}>Interval: {current.intervalDays} day{current.intervalDays === 1 ? "" : "s"}</Text>
             </View>
 
-            <View style={styles.wordBlock}>
-              <Text style={styles.word}>{current.word}</Text>
-            </View>
+            <Pressable
+              style={styles.wordBlock}
+              onPress={playCurrentAudio}
+              disabled={!current.audioUrl}
+            >
+              <Text style={styles.word}>
+                {current.word} {current.audioUrl ? (isPlayingAudio ? "🔊" : "▶︎") : ""}
+              </Text>
+            </Pressable>
 
             {showDefinition && (
               <View style={styles.definitionArea}>
