@@ -6,7 +6,11 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  Modal,
+  TouchableOpacity,
+  Dimensions,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { signOut } from "firebase/auth";
 import { collection, getDocs, Timestamp, orderBy, query } from "firebase/firestore";
 import { auth, db } from "../firebase/firebase";
@@ -29,6 +33,146 @@ type GameScoreEntry = {
   createdAt?: any;
 };
 
+type OnboardingSlide = {
+  title: string;
+  body: string;
+};
+
+const { width } = Dimensions.get("window");
+
+function OnboardingModal({
+  visible,
+  onFinish,
+}: {
+  visible: boolean;
+  onFinish: () => void;
+}) {
+  const slides: OnboardingSlide[] = [
+    {
+      title: "Welcome to Word-Nerd 👋",
+      body:
+        "Word-Nerd is designed to help you actually retain vocabulary over time, not just see words once. You can learn new words, review them consistently, track your progress, and practice with games.",
+    },
+    {
+      title: "Home / Progress",
+      body:
+        "The Home tab gives you a quick overview of your journey. You can see your stats, overall progress, achievements, daily goal, and top game scores all in one place.",
+    },
+    {
+      title: "Learn",
+      body:
+        "The Learn tab is where you discover and study new vocabulary. This is the main place to grow your personal word bank.",
+    },
+    {
+      title: "Review",
+      body:
+        "The Review tab helps you revisit words you have already seen. Reviewing over time is what helps move words into long-term memory.",
+    },
+    {
+      title: "Games",
+      body:
+        "The Games tab gives you fun ways to practice what you have learned. Use games to strengthen recall, improve speed, and make studying more interactive.",
+    },
+    {
+      title: "Learned",
+      body:
+        "The Learned tab lets you look back at words you have already worked on. It helps you keep track of your vocabulary progress and revisit familiar words.",
+    },
+    {
+      title: "You’re all set 🎉",
+      body:
+        "Start learning, keep reviewing, and use games to reinforce your knowledge. Word-Nerd is here to help you build vocabulary that actually sticks.",
+    },
+  ];
+
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    if (visible) {
+      setCurrentIndex(0);
+    }
+  }, [visible]);
+
+  const currentSlide = slides[currentIndex];
+  const isLastSlide = currentIndex === slides.length - 1;
+
+  const handleNext = () => {
+    if (isLastSlide) {
+      onFinish();
+    } else {
+      setCurrentIndex((prev) => prev + 1);
+    }
+  };
+
+  const handleBack = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex((prev) => prev - 1);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View style={styles.onboardingOverlay}>
+        <View style={styles.onboardingCard}>
+          <View style={styles.onboardingTopRow}>
+            <View style={styles.onboardingDots}>
+              {slides.map((_, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.onboardingDot,
+                    index === currentIndex && styles.onboardingDotActive,
+                  ]}
+                />
+              ))}
+            </View>
+
+            {!isLastSlide && (
+              <TouchableOpacity onPress={onFinish}>
+                <Text style={styles.onboardingSkip}>Skip</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <View style={styles.onboardingContent}>
+            <Text style={styles.onboardingTitle}>{currentSlide.title}</Text>
+            <Text style={styles.onboardingBody}>{currentSlide.body}</Text>
+          </View>
+
+          <View style={styles.onboardingButtonRow}>
+            <TouchableOpacity
+              onPress={handleBack}
+              disabled={currentIndex === 0}
+              style={[
+                styles.onboardingSecondaryButton,
+                currentIndex === 0 && styles.onboardingDisabledButton,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.onboardingSecondaryButtonText,
+                  currentIndex === 0 && styles.onboardingDisabledButtonText,
+                ]}
+              >
+                Back
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleNext}
+              style={styles.onboardingPrimaryButton}
+            >
+              <Text style={styles.onboardingPrimaryButtonText}>
+                {isLastSlide ? "Get Started" : "Next"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function HomeScreen({ onGoLearn }: Props) {
   const user = auth.currentUser;
 
@@ -50,6 +194,9 @@ export default function HomeScreen({ onGoLearn }: Props) {
 
   const [topScores, setTopScores] = useState<GameScoreEntry[]>([]);
   const [loadingScores, setLoadingScores] = useState(true);
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [loadingOnboarding, setLoadingOnboarding] = useState(true);
 
   useEffect(() => {
     const loadStats = async () => {
@@ -176,9 +323,32 @@ export default function HomeScreen({ onGoLearn }: Props) {
       }
     };
 
+    const checkOnboarding = async () => {
+      try {
+        const hasSeenOnboarding = await AsyncStorage.getItem("hasSeenOnboarding");
+        if (!hasSeenOnboarding) {
+          setShowOnboarding(true);
+        }
+      } catch (e) {
+        console.log("Failed to load onboarding status:", e);
+      } finally {
+        setLoadingOnboarding(false);
+      }
+    };
+
     loadStats();
     loadTopScores();
+    checkOnboarding();
   }, []);
+
+  const handleFinishOnboarding = async () => {
+    try {
+      await AsyncStorage.setItem("hasSeenOnboarding", "true");
+      setShowOnboarding(false);
+    } catch (e) {
+      console.log("Failed to save onboarding status:", e);
+    }
+  };
 
   const progressPct =
     stats.totalWords > 0
@@ -191,128 +361,143 @@ export default function HomeScreen({ onGoLearn }: Props) {
     { label: "10 Mastered", earned: stats.wordsMastered >= 10 },
   ];
 
+  if (loadingOnboarding) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color="#f97316" />
+      </View>
+    );
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.headerCard}>
-        <Text style={styles.greeting}>Welcome back, {username}! 👋</Text>
-        <Text style={styles.subtitle}>Ready to expand your vocabulary today?</Text>
-      </View>
+    <>
+      <OnboardingModal
+        visible={showOnboarding}
+        onFinish={handleFinishOnboarding}
+      />
 
-      <View style={styles.statsGrid}>
-        <View style={[styles.statCard, styles.greenCard]}>
-          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsSeen}</Text>
-          <Text style={styles.statLabel}>Words Seen 👀</Text>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.headerCard}>
+          <Text style={styles.greeting}>Welcome back, {username}! 👋</Text>
+          <Text style={styles.subtitle}>Ready to expand your vocabulary today?</Text>
         </View>
 
-        <View style={[styles.statCard, styles.orangeCard]}>
-          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsMastered}</Text>
-          <Text style={styles.statLabel}>Words Mastered ✅</Text>
-        </View>
-
-        <View style={[styles.statCard, styles.blueCard]}>
-          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.inReview}</Text>
-          <Text style={styles.statLabel}>In Review 🔁</Text>
-        </View>
-
-        <View style={[styles.statCard, styles.purpleCard]}>
-          <Text style={styles.statNumber}>{loadingStats ? "…" : stats.dueNow}</Text>
-          <Text style={styles.statLabel}>Due Now ⏰</Text>
-        </View>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.rowBetween}>
-          <Text style={styles.cardTitle}>Overall Progress</Text>
-          <Text style={styles.progressValue}>{progressPct}%</Text>
-        </View>
-        <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
-        </View>
-        <Text style={styles.cardText}>
-          {loadingStats
-            ? "Loading progress…"
-            : `${stats.wordsMastered} of ${stats.totalWords} words mastered`}
-        </Text>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.rowBetween}>
-          <Text style={styles.cardTitle}>Top Game Scores 🏆</Text>
-        </View>
-
-        <View style={styles.gameScoreBubble}>
-          <View style={styles.gameScoreHeader}>
-            <Text style={styles.gameScoreGameTitle}>Word Match</Text>
-            <Text style={styles.gameScoreChip}>Top 3</Text>
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, styles.greenCard]}>
+            <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsSeen}</Text>
+            <Text style={styles.statLabel}>Words Seen 👀</Text>
           </View>
 
-          {loadingScores ? (
-            <ActivityIndicator color="#f97316" />
-          ) : topScores.length === 0 ? (
-            <Text style={styles.cardText}>
-              No scores yet — play a round to set your first high score.
-            </Text>
-          ) : (
-            topScores.map((entry, index) => (
-              <View key={entry.id} style={styles.scoreRow}>
-                <View style={styles.scoreRankBadge}>
-                  <Text style={styles.scoreRankText}>#{index + 1}</Text>
-                </View>
-                <Text style={styles.scoreValue}>{entry.score}</Text>
-              </View>
-            ))
-          )}
-        </View>
-      </View>
+          <View style={[styles.statCard, styles.orangeCard]}>
+            <Text style={styles.statNumber}>{loadingStats ? "…" : stats.wordsMastered}</Text>
+            <Text style={styles.statLabel}>Words Mastered ✅</Text>
+          </View>
 
-      <View style={styles.card}>
-        <View style={styles.rowBetween}>
-          <Text style={styles.cardTitle}>Achievements</Text>
+          <View style={[styles.statCard, styles.blueCard]}>
+            <Text style={styles.statNumber}>{loadingStats ? "…" : stats.inReview}</Text>
+            <Text style={styles.statLabel}>In Review 🔁</Text>
+          </View>
+
+          <View style={[styles.statCard, styles.purpleCard]}>
+            <Text style={styles.statNumber}>{loadingStats ? "…" : stats.dueNow}</Text>
+            <Text style={styles.statLabel}>Due Now ⏰</Text>
+          </View>
         </View>
-        <View style={styles.achievements}>
-          {learnedBadge.map((badge) => (
-            <View
-              key={badge.label}
-              style={[
-                styles.achievementCard,
-                badge.earned ? styles.achievementActive : styles.achievementMuted,
-              ]}
-            >
-              <Text style={[styles.achievementIcon, badge.earned && styles.achievementIconActive]}>
-                ★
-              </Text>
-              <Text style={styles.achievementLabel}>{badge.label}</Text>
+
+        <View style={styles.card}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>Overall Progress</Text>
+            <Text style={styles.progressValue}>{progressPct}%</Text>
+          </View>
+          <View style={styles.progressBar}>
+            <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+          </View>
+          <Text style={styles.cardText}>
+            {loadingStats
+              ? "Loading progress…"
+              : `${stats.wordsMastered} of ${stats.totalWords} words mastered`}
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>Top Game Scores 🏆</Text>
+          </View>
+
+          <View style={styles.gameScoreBubble}>
+            <View style={styles.gameScoreHeader}>
+              <Text style={styles.gameScoreGameTitle}>Word Match</Text>
+              <Text style={styles.gameScoreChip}>Top 3</Text>
             </View>
-          ))}
-        </View>
-      </View>
 
-      <View style={styles.dailyCard}>
-        <Text style={styles.cardTitle}>Today's Goal 🎯</Text>
-        <Text style={styles.cardText}>
-          {loadingStats
-            ? "Loading today’s progress…"
-            : `${stats.todaySeen} / 3 new words seen today`}
-        </Text>
-        <View style={styles.dailyProgress}>
-          <View
-            style={[
-              styles.dailyFill,
-              { width: `${Math.min((stats.todaySeen / 3) * 100, 100)}%` },
-            ]}
-          />
+            {loadingScores ? (
+              <ActivityIndicator color="#f97316" />
+            ) : topScores.length === 0 ? (
+              <Text style={styles.cardText}>
+                No scores yet — play a round to set your first high score.
+              </Text>
+            ) : (
+              topScores.map((entry, index) => (
+                <View key={entry.id} style={styles.scoreRow}>
+                  <View style={styles.scoreRankBadge}>
+                    <Text style={styles.scoreRankText}>#{index + 1}</Text>
+                  </View>
+                  <Text style={styles.scoreValue}>{entry.score}</Text>
+                </View>
+              ))
+            )}
+          </View>
         </View>
-      </View>
 
-      <View style={styles.actions}>
-        <Pressable style={styles.primary} onPress={onGoLearn}>
-          <Text style={styles.primaryText}>Go to Learn</Text>
-        </Pressable>
-        <Pressable style={styles.secondary} onPress={() => signOut(auth)}>
-          <Text style={styles.secondaryText}>Log out</Text>
-        </Pressable>
-      </View>
-    </ScrollView>
+        <View style={styles.card}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>Achievements</Text>
+          </View>
+          <View style={styles.achievements}>
+            {learnedBadge.map((badge) => (
+              <View
+                key={badge.label}
+                style={[
+                  styles.achievementCard,
+                  badge.earned ? styles.achievementActive : styles.achievementMuted,
+                ]}
+              >
+                <Text style={[styles.achievementIcon, badge.earned && styles.achievementIconActive]}>
+                  ★
+                </Text>
+                <Text style={styles.achievementLabel}>{badge.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={styles.dailyCard}>
+          <Text style={styles.cardTitle}>Today's Goal 🎯</Text>
+          <Text style={styles.cardText}>
+            {loadingStats
+              ? "Loading today’s progress…"
+              : `${stats.todaySeen} / 3 new words seen today`}
+          </Text>
+          <View style={styles.dailyProgress}>
+            <View
+              style={[
+                styles.dailyFill,
+                { width: `${Math.min((stats.todaySeen / 3) * 100, 100)}%` },
+              ]}
+            />
+          </View>
+        </View>
+
+        <View style={styles.actions}>
+          <Pressable style={styles.primary} onPress={onGoLearn}>
+            <Text style={styles.primaryText}>Go to Learn</Text>
+          </Pressable>
+          <Pressable style={styles.secondary} onPress={() => signOut(auth)}>
+            <Text style={styles.secondaryText}>Log out</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </>
   );
 }
 
@@ -320,6 +505,12 @@ const styles = StyleSheet.create({
   container: {
     padding: 24,
     gap: 16,
+    backgroundColor: "#fff7ed",
+  },
+  loadingScreen: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
     backgroundColor: "#fff7ed",
   },
   headerCard: {
@@ -486,4 +677,106 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
   },
   secondaryText: { color: "#c2410c", fontWeight: "800" },
+
+  onboardingOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  onboardingCard: {
+    width: width > 500 ? 420 : "100%",
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: "#ffedd5",
+    shadowColor: "#000",
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  onboardingTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 18,
+  },
+  onboardingDots: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    flex: 1,
+    marginRight: 10,
+  },
+  onboardingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#d1d5db",
+  },
+  onboardingDotActive: {
+    width: 24,
+    backgroundColor: "#f97316",
+  },
+  onboardingSkip: {
+    color: "#64748b",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  onboardingContent: {
+    minHeight: 220,
+    justifyContent: "center",
+    paddingVertical: 10,
+  },
+  onboardingTitle: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: "#0f172a",
+    textAlign: "center",
+    marginBottom: 14,
+  },
+  onboardingBody: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: "#475569",
+    textAlign: "center",
+  },
+  onboardingButtonRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 16,
+  },
+  onboardingPrimaryButton: {
+    flex: 1,
+    backgroundColor: "#f97316",
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  onboardingPrimaryButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 16,
+  },
+  onboardingSecondaryButton: {
+    flex: 1,
+    backgroundColor: "#f3f4f6",
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  onboardingSecondaryButtonText: {
+    color: "#0f172a",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  onboardingDisabledButton: {
+    backgroundColor: "#e5e7eb",
+  },
+  onboardingDisabledButtonText: {
+    color: "#94a3b8",
+  },
 });
