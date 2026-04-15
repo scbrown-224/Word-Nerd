@@ -35,16 +35,22 @@ export default function GamesScreen() {
   const [activeTab, setActiveTab] = useState<GameTab>("play");
   const [matchScores, setMatchScores] = useState<GameScoreEntry[]>([]);
   const [loadingScores, setLoadingScores] = useState(false);
-  const [activeGame, setActiveGame] = useState<"menu" | "hangman">("menu");
+  const [activeGame, setActiveGame] = useState<"menu" | "hangman" | "scramble">("menu");
   const [hangmanPool, setHangmanPool] = useState<HangmanWord[]>([]);
   const [hangmanCurrent, setHangmanCurrent] = useState<HangmanWord | null>(null);
   const [guessedLetters, setGuessedLetters] = useState<string[]>([]);
   const [misses, setMisses] = useState(0);
   const [loadingHangman, setLoadingHangman] = useState(false);
+  const [scramblePool, setScramblePool] = useState<HangmanWord[]>([]);
+  const [scrambleCurrent, setScrambleCurrent] = useState<HangmanWord | null>(null);
+  const [scrambleTiles, setScrambleTiles] = useState<Array<{ id: string; letter: string }>>([]);
+  const [scrambleGuess, setScrambleGuess] = useState<string[]>([]);
+  const [loadingScramble, setLoadingScramble] = useState(false);
 
   const games = [
     { title: "Match", desc: "Drag words onto the correct definition.", accent: "#f97316", icon: "🎯" },
     { title: "Hangman", desc: "Read the definition and guess the word with 5 misses.", accent: "#0f766e", icon: "🔤" },
+    { title: "Word Scramble", desc: "Use the definition to unscramble the word.", accent: "#7c3aed", icon: "🧩" },
   ];
 
   const onPlay = (title: string) => {
@@ -59,6 +65,10 @@ export default function GamesScreen() {
 
     if (title === "Hangman") {
       startHangman();
+    }
+
+    if (title === "Word Scramble") {
+      startScramble();
     }
   };
 
@@ -110,6 +120,20 @@ export default function GamesScreen() {
     return fetched;
   };
 
+  const shuffleLetters = (letters: string[]) => {
+    const shuffled = [...letters];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    if (shuffled.join("") === letters.join("") && shuffled.length > 1) {
+      [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+    }
+
+    return shuffled;
+  };
+
   const pickNextHangmanWord = (pool: HangmanWord[]) => {
     if (pool.length === 0) return null;
 
@@ -137,6 +161,42 @@ export default function GamesScreen() {
     }
   };
 
+  const pickNextScrambleWord = (pool: HangmanWord[]) => {
+    if (pool.length === 0) return null;
+
+    const currentId = scrambleCurrent?.wordId;
+    const options = pool.filter((word) => word.wordId !== currentId && !word.word.includes(" ") && !word.word.includes("-"));
+    const source = options.length ? options : pool.filter((word) => !word.word.includes(" ") && !word.word.includes("-"));
+    if (source.length === 0) return null;
+    return source[Math.floor(Math.random() * source.length)];
+  };
+
+  const buildScrambleTiles = (word: string) =>
+    shuffleLetters(word.split("")).map((letter, index) => ({
+      id: `${letter}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+      letter,
+    }));
+
+  const startScramble = async () => {
+    setActiveGame("scramble");
+    setLoadingScramble(true);
+
+    try {
+      const pool = scramblePool.length ? scramblePool : await loadHangmanPool();
+      setScramblePool(pool);
+      const nextWord = pickNextScrambleWord(pool);
+      setScrambleCurrent(nextWord);
+      setScrambleGuess([]);
+      setScrambleTiles(nextWord ? buildScrambleTiles(nextWord.word) : []);
+    } catch (e) {
+      console.log("Failed to load scramble words:", e);
+      setScrambleCurrent(null);
+      setScrambleTiles([]);
+    } finally {
+      setLoadingScramble(false);
+    }
+  };
+
   const currentWordLetters = useMemo(() => {
     if (!hangmanCurrent) return [];
     return hangmanCurrent.word.split("");
@@ -161,6 +221,8 @@ export default function GamesScreen() {
   const won = uniqueLetters.length > 0 && uniqueLetters.every((char) => guessedSet.has(char));
   const lost = misses >= MAX_MISSES;
   const remainingMisses = Math.max(0, MAX_MISSES - misses);
+  const scrambleGuessWord = scrambleGuess.join("");
+  const scrambleSolved = !!scrambleCurrent && scrambleGuessWord === scrambleCurrent.word;
 
   const handleGuess = (letter: string) => {
     if (!hangmanCurrent || won || lost || guessedSet.has(letter)) return;
@@ -170,6 +232,116 @@ export default function GamesScreen() {
       setMisses((prev) => prev + 1);
     }
   };
+
+  const addScrambleLetter = (tileId: string) => {
+    if (!scrambleCurrent || scrambleSolved) return;
+
+    const tile = scrambleTiles.find((entry) => entry.id === tileId);
+    if (!tile) return;
+
+    setScrambleGuess((prev) => [...prev, tile.letter]);
+    setScrambleTiles((prev) => prev.filter((entry) => entry.id !== tileId));
+  };
+
+  const removeScrambleLetter = (index: number) => {
+    if (!scrambleCurrent || scrambleSolved) return;
+
+    const letter = scrambleGuess[index];
+    if (!letter) return;
+
+    setScrambleGuess((prev) => prev.filter((_, tileIndex) => tileIndex !== index));
+    setScrambleTiles((prev) => [...prev, { id: `${letter}-${Date.now()}-${index}`, letter }]);
+  };
+
+  const clearScrambleGuess = () => {
+    if (!scrambleCurrent) return;
+    setScrambleTiles((prev) => [...prev, ...scrambleGuess.map((letter, index) => ({
+      id: `${letter}-${Date.now()}-clear-${index}`,
+      letter,
+    }))]);
+    setScrambleGuess([]);
+  };
+
+  const renderScramble = () => (
+    <View style={styles.section}>
+      <View style={styles.heroCard}>
+        <Text style={[styles.heroEyebrow, styles.scrambleEyebrow]}>Word Scramble</Text>
+        <Text style={styles.heroTitle}>Unscramble the word from its definition.</Text>
+        <Text style={styles.heroBody}>
+          Tap letters from the scrambled bank to build the correct word.
+        </Text>
+      </View>
+
+      <View style={styles.scrambleCard}>
+        {loadingScramble ? (
+          <ActivityIndicator color="#7c3aed" />
+        ) : !scrambleCurrent ? (
+          <>
+            <Text style={styles.hangmanEmptyTitle}>No words ready yet</Text>
+            <Text style={styles.emptyText}>
+              Learn or review a few words first so Word Scramble has definitions to use.
+            </Text>
+          </>
+        ) : (
+          <>
+            <View style={styles.definitionBubble}>
+              <Text style={[styles.definitionTitle, styles.scrambleDefinitionTitle]}>Definition</Text>
+              <Text style={styles.definitionBody}>{scrambleCurrent.definition}</Text>
+            </View>
+
+            <View style={styles.scrambleGuessRow}>
+              {scrambleCurrent.word.split("").map((_, index) => {
+                const letter = scrambleGuess[index] ?? "";
+                return (
+                  <Pressable
+                    key={`guess-${index}`}
+                    style={[styles.scrambleSlot, letter && styles.scrambleSlotFilled]}
+                    onPress={() => removeScrambleLetter(index)}
+                    disabled={!letter || scrambleSolved}
+                  >
+                    <Text style={styles.scrambleSlotText}>{letter || "_"}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.statusText}>
+              {scrambleSolved
+                ? `Correct: ${scrambleCurrent.word}`
+                : scrambleGuessWord.length === scrambleCurrent.word.length
+                  ? "Not quite. Tap a filled slot to put a letter back."
+                  : "Build the word from the scrambled letters."}
+            </Text>
+
+            <View style={styles.scrambleTileRow}>
+              {scrambleTiles.map((tile) => (
+                <Pressable
+                  key={tile.id}
+                  style={styles.scrambleTile}
+                  onPress={() => addScrambleLetter(tile.id)}
+                  disabled={scrambleSolved}
+                >
+                  <Text style={styles.scrambleTileText}>{tile.letter}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.hangmanActions}>
+              <Pressable style={styles.secondary} onPress={() => setActiveGame("menu")}>
+                <Text style={styles.secondaryText}>Back to games</Text>
+              </Pressable>
+              <Pressable style={styles.secondary} onPress={clearScrambleGuess}>
+                <Text style={styles.secondaryText}>Clear</Text>
+              </Pressable>
+              <Pressable style={styles.primary} onPress={startScramble}>
+                <Text style={styles.primaryText}>{scrambleSolved ? "Play again" : "New word"}</Text>
+              </Pressable>
+            </View>
+          </>
+        )}
+      </View>
+    </View>
+  );
 
   const renderHangman = () => (
     <View style={styles.section}>
@@ -285,6 +457,8 @@ export default function GamesScreen() {
       {activeTab === "play" ? (
         activeGame === "hangman" ? (
           renderHangman()
+        ) : activeGame === "scramble" ? (
+          renderScramble()
         ) : (
           <View style={styles.section}>
             <View style={styles.heroCard}>
@@ -491,6 +665,14 @@ const styles = StyleSheet.create({
     borderColor: "#ccfbf1",
     gap: 16,
   },
+  scrambleCard: {
+    backgroundColor: "white",
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#ddd6fe",
+    gap: 16,
+  },
   hangmanMetaRow: {
     flexDirection: "row",
     gap: 8,
@@ -524,6 +706,12 @@ const styles = StyleSheet.create({
     color: "#134e4a",
     lineHeight: 22,
     fontSize: 15,
+  },
+  scrambleEyebrow: {
+    color: "#7c3aed",
+  },
+  scrambleDefinitionTitle: {
+    color: "#7c3aed",
   },
   wordSlots: {
     flexDirection: "row",
@@ -589,6 +777,50 @@ const styles = StyleSheet.create({
   hangmanActions: {
     flexDirection: "row",
     gap: 10,
+  },
+  scrambleGuessRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "center",
+  },
+  scrambleSlot: {
+    minWidth: 36,
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#c4b5fd",
+    backgroundColor: "#faf5ff",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  scrambleSlotFilled: {
+    backgroundColor: "#ede9fe",
+  },
+  scrambleSlotText: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#4c1d95",
+  },
+  scrambleTileRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "center",
+  },
+  scrambleTile: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#7c3aed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scrambleTileText: {
+    color: "white",
+    fontWeight: "800",
+    fontSize: 20,
   },
   hangmanEmptyTitle: {
     fontSize: 18,
